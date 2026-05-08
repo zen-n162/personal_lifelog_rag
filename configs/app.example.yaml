@@ -1,0 +1,31 @@
+app:
+  name: personal_lifelog_rag
+  local_only: true
+  default_year: 2024
+
+database:
+  path: data/db/lifelog.sqlite
+
+storage:
+  data_dir: data
+  raw_photos_dir: data/raw/photos
+  raw_line_dir: data/raw/line
+  processed_dir: data/processed
+  thumbnails_dir: data/thumbnails
+  models_dir: models
+
+ingest:
+  photos_dir: data/raw/photos
+  line_exports_dir: data/raw/line
+
+event_building:
+  generation_method: rule_based_daily_v2
+  photo_gap_minutes: 90
+  line_gap_minutes: 120
+  merge_window_minutes: 90
+  gps_distance_meters: 500
+
+privacy:
+  allow_network: false
+  bind_host: 127.0.0.1
+  persist_raw_exports: true

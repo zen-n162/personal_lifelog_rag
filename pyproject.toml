@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-lifelog-rag"
+version = "0.1.0"
+description = "Local-first personal lifelog search and RAG application."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Private" }
+authors = [
+  { name = "personal_lifelog_rag contributors" }
+]
+dependencies = [
+  "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+ui = [
+  "gradio>=4.0",
+]
+embeddings = [
+  "sentence-transformers>=2.7",
+]
+ocr = [
+  "pytesseract>=0.3.10",
+]
+ocr-paddle = [
+  "paddleocr>=2.7",
+]
+ocr-easy = [
+  "easyocr>=1.7",
+]
+vlm = [
+  "transformers>=4.40",
+  "accelerate>=0.30",
+  "torch>=2.0",
+]
+vlm-ollama = [
+  "requests>=2.31",
+]
+
+[project.scripts]
+personal-lifelog-rag = "personal_lifelog_rag.app.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]

@@ -1,0 +1,32 @@
+# Dummy local place dictionary. Copy this to private_config/places.yaml and
+# replace coordinates with your own local-only values. Do not commit private_config/.
+places:
+  - id: dummy_home_area
+    name: "自宅周辺"
+    display_name: "自宅周辺"
+    lat: 0.000000
+    lon: 0.000000
+    radius_m: 300
+    category: "private"
+    privacy_level: "sensitive"
+    show_exact_location: false
+
+  - id: dummy_school_area
+    name: "大学周辺"
+    display_name: "大学周辺"
+    lat: 0.010000
+    lon: 0.010000
+    radius_m: 500
+    category: "school"
+    privacy_level: "normal"
+    show_exact_location: false
+
+  - id: dummy_station_area
+    name: "駅周辺"
+    display_name: "駅周辺"
+    lat: 0.020000
+    lon: 0.020000
+    radius_m: 800
+    category: "station"
+    privacy_level: "normal"
+    show_exact_location: false

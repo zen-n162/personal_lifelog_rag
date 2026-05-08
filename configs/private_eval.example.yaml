@@ -1,0 +1,81 @@
+cases:
+  - id: dummy_intent_place_001
+    type: query_intent
+    question: "ダミー駅に行ったのはいつ？"
+    expected_intent: "place_visit"
+    expected_entities:
+      place: "ダミー駅"
+
+  - id: dummy_routed_place_001
+    type: routed_qa
+    question: "ダミー駅に行ったのはいつ？"
+    expected_intent: "place_visit"
+    should_not_include:
+      - "確実に行った"
+
+  - id: dummy_search_food_001
+    type: keyword_search
+    question: "ダミーご飯を食べた日は？"
+    query: "ダミーご飯"
+    intent: "food_activity"
+    expected_top_contains_any:
+      - "食事・カフェの可能性"
+      - "ダミーご飯"
+    should_downrank_phrases:
+      - "どうしよ"
+      - "何食べたい"
+
+  - id: dummy_call_completed_001
+    type: call_search
+    question: "長電話した日は？"
+    filters:
+      completed: true
+      min_duration_sec: 600
+    expected_status: "completed"
+    should_not_include_status:
+      - "missed"
+      - "unanswered"
+
+  - id: dummy_date_001
+    type: date_qa
+    question: "2099年1月1日は何していた？"
+    expected_dates:
+      - "2099-01-01"
+    should_not_include:
+      - "確実に"
+      - "デートしていた"
+    expected_max_activity_confidence: "中"
+
+  - id: dummy_event_quality_001
+    type: event_quality
+    date: "2099-01-01"
+    max_line_only_low_value_events: 5
+    no_orphan_evidence: true
+
+  - id: dummy_place_assignment_001
+    type: place_assignment
+    date: "2099-01-01"
+    forbidden_exact_gps_in_answer: true
+
+  - id: dummy_ocr_quality_001
+    type: ocr_quality
+    date: "2099-01-01"
+    expected_min_ocr_success: 0
+
+  - id: dummy_image_search_001
+    type: image_search
+    query: "ダミーラーメン"
+    expected_min_results: 0
+
+  - id: dummy_vlm_quality_001
+    type: vlm_quality
+    date: "2099-01-01"
+    expected_min_vlm_success: 0
+    forbidden_terms:
+      - "家族"
+      - "病気"
+      - "宗教"
+
+  - id: dummy_event_override_001
+    type: event_override
+    event_id: "dummy_event_id"

@@ -1,0 +1,35 @@
+# Local private data
+data/
+backups/
+models/
+thumbnails/
+private_eval/
+private_config/
+eval_outputs/
+ocr_outputs/
+vlm_outputs/
+*.sqlite
+*.db
+
+# Environment and secrets
+.env
+.venv/
+venv/
+.agents/
+.codex/
+.git-local/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

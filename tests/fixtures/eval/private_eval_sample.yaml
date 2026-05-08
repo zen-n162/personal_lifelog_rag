@@ -1,0 +1,35 @@
+cases:
+  - id: date_001
+    type: date_qa
+    question: "2024年12月24日は何していた？"
+    expected_dates:
+      - "2024-12-24"
+    expected_event_keywords:
+      - "通話・連絡"
+    expected_evidence_types:
+      - "line"
+      - "photo"
+    should_not_include:
+      - "確実に"
+      - "デートしていた"
+    max_confidence_for_activity: "高"
+
+  - id: date_002
+    type: date_qa
+    question: "2024年12月25日は何していた？"
+    expected_dates:
+      - "2024-12-25"
+    expected_min_events: 1
+    should_not_include:
+      - "根拠なく"
+      - "確実に"
+
+  - id: search_001
+    type: keyword_search
+    question: "新宿に行ったのはいつ？"
+    query: "新宿"
+    expected_dates:
+      - "2024-12-24"
+    expected_keywords:
+      - "新宿"
+
