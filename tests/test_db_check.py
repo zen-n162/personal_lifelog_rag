@@ -46,6 +46,29 @@ def test_db_check_detects_orphan_evidence(tmp_path) -> None:
     assert not report["strict"]["ok"]
 
 
+def test_db_check_detects_invalid_vlm_event_evidence(tmp_path) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    _seed_normal_db(repository, tmp_path)
+    repository.upsert_media_vlm(
+        media_id="media_ok",
+        caption="failed VLM candidate",
+        short_caption="failed",
+        status="failed",
+        vlm_engine="qwen3_vl_transformers",
+        model_name="local-qwen",
+    )
+    repository.add_event_evidence(event_id="event_ok", evidence_type="vlm", evidence_id="media_ok", weight=0.2)
+
+    report = run_db_check(db_path)
+
+    assert report["event_evidence"]["non_success_vlm_refs"] == 1
+    assert report["event_evidence"]["failed_vlm_refs"] == 1
+    assert report["event_evidence"]["invalid_vlm_refs"] == 1
+    assert not report["strict"]["ok"]
+
+
 def test_db_check_detects_orphan_line_call_event(tmp_path) -> None:
     db_path = tmp_path / "lifelog.sqlite"
     repository = LifelogRepository(db_path)
@@ -65,6 +88,52 @@ def test_db_check_detects_orphan_line_call_event(tmp_path) -> None:
     report = run_db_check(db_path)
 
     assert report["line_call_events"]["orphan_message_refs"] == 1
+    assert not report["strict"]["ok"]
+
+
+def test_db_check_detects_bad_media_embedding(tmp_path) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO media_embeddings (
+                media_id, embedding_type, embedding_model, embedding_dim,
+                embedding, embedding_format, status
+            )
+            VALUES ('missing_media', 'image', 'fake', 3, X'0000', 'float32_numpy', 'success')
+            """
+        )
+        connection.commit()
+
+    report = run_db_check(db_path)
+
+    assert report["media_embeddings"]["orphan_media_refs"] == 1
+    assert report["media_embeddings"]["dimension_mismatch_count"] == 1
+    assert not report["strict"]["ok"]
+
+
+def test_db_check_detects_bad_vlm_override(tmp_path) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO media_vlm_overrides (
+                media_id, scene_tags_override_json, review_status
+            )
+            VALUES ('missing_media', '{bad json', 'mystery')
+            """
+        )
+        connection.commit()
+
+    report = run_db_check(db_path)
+
+    assert report["media_vlm_overrides"]["orphan_media_refs"] == 1
+    assert report["media_vlm_overrides"]["unknown_status_count"] == 1
+    assert report["media_vlm_overrides"]["invalid_json_count"] == 1
     assert not report["strict"]["ok"]
 
 

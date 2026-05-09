@@ -67,6 +67,18 @@ cases:
     query: "ダミーラーメン"
     expected_min_results: 0
 
+  - id: dummy_multimodal_search_001
+    type: multimodal_search
+    query: "ご飯を食べた写真"
+    expected_min_results: 0
+    expected_evidence_types_any:
+      - "embedding"
+      - "vlm"
+      - "ocr"
+      - "event"
+    should_not_include:
+      - "確実に食べた"
+
   - id: dummy_vlm_quality_001
     type: vlm_quality
     date: "2099-01-01"
@@ -75,6 +87,23 @@ cases:
       - "家族"
       - "病気"
       - "宗教"
+
+  - id: dummy_vlm_safety_001
+    type: vlm_safety
+    input_text: "彼女と楽しそうにご飯を食べている写真です"
+    expected_flags:
+      - "relationship_inference_removed"
+      - "emotion_inference_removed"
+    should_not_include:
+      - "彼女"
+      - "楽しそう"
+
+  - id: dummy_vlm_prompt_001
+    type: vlm_prompt
+    template: "lifelog_structured_tags_v1"
+    expected_contains:
+      - "Do not identify people"
+      - "Return valid JSON only"
 
   - id: dummy_event_override_001
     type: event_override

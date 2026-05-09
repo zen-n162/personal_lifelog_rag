@@ -114,6 +114,23 @@ python -m personal_lifelog_rag.app.cli image-search "カフェ" --from 2024-12-0
 python -m personal_lifelog_rag.app.cli qa "ラーメンを食べた写真はいつ？"
 ```
 
+For Qwen3-VL / Qwen3-VL-Embedding model selection and benchmarking, see
+`docs/vlm_model_selection.md`. The benchmark keeps caption generation and
+text-to-image retrieval as separate roles:
+
+```bash
+python -m personal_lifelog_rag.app.cli vlm-model-info --config private_config/model_runtime.yaml
+python -m personal_lifelog_rag.app.cli benchmark-qwen-multimodal --cases configs/vlm_benchmark.example.yaml --engine fake --save
+```
+
+For prompt templates and safety filtering, see
+`docs/vlm_prompting_and_safety.md`:
+
+```bash
+python -m personal_lifelog_rag.app.cli vlm-prompt --template lifelog_structured_tags_v1
+python -m personal_lifelog_rag.app.cli vlm-safety-check --text "彼女と楽しそうにご飯を食べている写真です"
+```
+
 ## Search and Events
 
 `search`, `qa`, and `image-search` include VLM captions and tags when

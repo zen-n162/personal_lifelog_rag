@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 14
 
 SCHEMA_STATEMENTS = [
     """
@@ -134,6 +134,9 @@ SCHEMA_STATEMENTS = [
         activity_tags_json TEXT,
         location_cues_json TEXT,
         food_cues_json TEXT,
+        text_cues_json TEXT,
+        uncertainty_notes_json TEXT,
+        evidence_strength TEXT,
         people_count INTEGER,
         contains_text_hint INTEGER,
         safety_flags_json TEXT,
@@ -145,6 +148,79 @@ SCHEMA_STATEMENTS = [
         error_message TEXT,
         analyzed_at TEXT,
         analysis_version TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS media_vlm_overrides (
+        media_id TEXT PRIMARY KEY,
+        caption_override TEXT,
+        short_caption_override TEXT,
+        scene_tags_override_json TEXT,
+        object_tags_override_json TEXT,
+        activity_tags_override_json TEXT,
+        food_cues_override_json TEXT,
+        location_cues_override_json TEXT,
+        is_verified INTEGER NOT NULL DEFAULT 0,
+        is_hidden INTEGER NOT NULL DEFAULT 0,
+        is_wrong INTEGER NOT NULL DEFAULT 0,
+        is_searchable INTEGER NOT NULL DEFAULT 1,
+        is_event_usable INTEGER NOT NULL DEFAULT 1,
+        review_status TEXT NOT NULL DEFAULT 'unreviewed',
+        review_note TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (media_id) REFERENCES media_items (id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS media_embeddings (
+        media_id TEXT,
+        embedding_type TEXT,
+        embedding_model TEXT,
+        embedding_dim INTEGER,
+        embedding BLOB,
+        embedding_format TEXT,
+        source_text TEXT,
+        status TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (media_id, embedding_type, embedding_model),
+        FOREIGN KEY (media_id) REFERENCES media_items (id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS analysis_jobs (
+        job_id TEXT PRIMARY KEY,
+        job_type TEXT,
+        status TEXT,
+        target_scope_json TEXT,
+        engine TEXT,
+        model_name TEXT,
+        prompt_version TEXT,
+        analysis_version TEXT,
+        total_items INTEGER,
+        processed_items INTEGER,
+        success_items INTEGER,
+        failed_items INTEGER,
+        skipped_items INTEGER,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        error_message TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS analysis_job_items (
+        job_id TEXT,
+        item_id TEXT,
+        item_type TEXT,
+        status TEXT,
+        error_message TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        latency_sec REAL,
+        PRIMARY KEY (job_id, item_id),
+        FOREIGN KEY (job_id) REFERENCES analysis_jobs (job_id) ON DELETE CASCADE
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_media_items_captured_at ON media_items (captured_at)",
@@ -164,6 +240,14 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_media_ocr_engine ON media_ocr (ocr_engine)",
     "CREATE INDEX IF NOT EXISTS idx_media_vlm_status ON media_vlm (status)",
     "CREATE INDEX IF NOT EXISTS idx_media_vlm_engine ON media_vlm (vlm_engine)",
+    "CREATE INDEX IF NOT EXISTS idx_media_vlm_overrides_status ON media_vlm_overrides (review_status)",
+    "CREATE INDEX IF NOT EXISTS idx_media_vlm_overrides_flags ON media_vlm_overrides (is_hidden, is_wrong, is_searchable, is_event_usable, is_verified)",
+    "CREATE INDEX IF NOT EXISTS idx_media_embeddings_media ON media_embeddings (media_id)",
+    "CREATE INDEX IF NOT EXISTS idx_media_embeddings_type_model ON media_embeddings (embedding_type, embedding_model)",
+    "CREATE INDEX IF NOT EXISTS idx_media_embeddings_status ON media_embeddings (status)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status ON analysis_jobs (status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_type ON analysis_jobs (job_type, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_job_items_status ON analysis_job_items (job_id, status)",
     f"PRAGMA user_version = {SCHEMA_VERSION}",
 ]
 
@@ -175,6 +259,10 @@ TABLE_NAMES = (
     "line_call_events",
     "media_ocr",
     "media_vlm",
+    "media_vlm_overrides",
+    "media_embeddings",
+    "analysis_jobs",
+    "analysis_job_items",
 )
 
 REQUIRED_COLUMNS = {
@@ -264,6 +352,66 @@ REQUIRED_COLUMNS = {
         "analyzed_at",
         "analysis_version",
     },
+    "media_vlm_overrides": {
+        "media_id",
+        "caption_override",
+        "short_caption_override",
+        "scene_tags_override_json",
+        "object_tags_override_json",
+        "activity_tags_override_json",
+        "food_cues_override_json",
+        "location_cues_override_json",
+        "is_verified",
+        "is_hidden",
+        "is_wrong",
+        "is_searchable",
+        "is_event_usable",
+        "review_status",
+        "review_note",
+        "updated_at",
+    },
+    "media_embeddings": {
+        "media_id",
+        "embedding_type",
+        "embedding_model",
+        "embedding_dim",
+        "embedding",
+        "embedding_format",
+        "source_text",
+        "status",
+        "error_message",
+        "created_at",
+        "updated_at",
+    },
+    "analysis_jobs": {
+        "job_id",
+        "job_type",
+        "status",
+        "target_scope_json",
+        "engine",
+        "model_name",
+        "prompt_version",
+        "analysis_version",
+        "total_items",
+        "processed_items",
+        "success_items",
+        "failed_items",
+        "skipped_items",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "error_message",
+    },
+    "analysis_job_items": {
+        "job_id",
+        "item_id",
+        "item_type",
+        "status",
+        "error_message",
+        "started_at",
+        "finished_at",
+        "latency_sec",
+    },
 }
 
 
@@ -285,6 +433,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         _add_column_if_missing(connection, "events", "source", "TEXT")
         _add_column_if_missing(connection, "events", "generation_method", "TEXT")
         _add_column_if_missing(connection, "events", "is_user_edited", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(connection, "media_vlm", "text_cues_json", "TEXT")
+        _add_column_if_missing(connection, "media_vlm", "uncertainty_notes_json", "TEXT")
+        _add_column_if_missing(connection, "media_vlm", "evidence_strength", "TEXT")
+        _add_column_if_missing(connection, "media_vlm_overrides", "review_note", "TEXT")
 
 
 def _drop_incompatible_empty_tables(connection: sqlite3.Connection) -> None:

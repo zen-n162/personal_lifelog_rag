@@ -7,6 +7,8 @@ from typing import Any
 
 from personal_lifelog_rag.core.privacy import ensure_localhost, redact_text
 from personal_lifelog_rag.db.repository import LifelogRepository, resolve_db_path
+from personal_lifelog_rag.embeddings.multimodal_search import format_multimodal_search, multimodal_search
+from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
 from personal_lifelog_rag.ingest.line_parser import parse_line_chat_file_with_warnings
 from personal_lifelog_rag.ingest.photo_ingest import ingest_photo_directory_with_report
 from personal_lifelog_rag.ocr.engines import get_ocr_engine
@@ -34,6 +36,18 @@ from personal_lifelog_rag.ui.event_review_service import (
     make_eval_case_yaml,
     review_queue,
     review_rows_for_dataframe,
+)
+from personal_lifelog_rag.ui.vlm_review_service import (
+    VlmOverrideUpdate,
+    VlmReviewFilters,
+    bulk_update_vlm_overrides,
+    clear_vlm_override,
+    generate_vlm_eval_case,
+    get_vlm_review_detail,
+    list_vlm_review_items,
+    parse_tag_text,
+    review_rows_for_dataframe as vlm_review_rows_for_dataframe,
+    save_vlm_override,
 )
 from personal_lifelog_rag.vlm.engines import get_vlm_engine
 from personal_lifelog_rag.vlm.schemas import ImageSearchOptions
@@ -190,6 +204,40 @@ def create_app(db_path: str | Path | None = None):
             for row in report["results"]
         ]
         return format_image_search(report), rows
+
+    def _multimodal_search_ui(
+        query_text: str,
+        backend_value: str,
+        from_text: str,
+        to_text: str,
+        limit_value: float | None,
+    ) -> tuple[str, list[list[str]]]:
+        report = multimodal_search(
+            _repository(),
+            MultimodalSearchOptions(
+                query=query_text,
+                date_from=_blank_or_none(from_text),
+                date_to=_blank_or_none(to_text),
+                limit=_int_or_none(limit_value) or 10,
+                backend=backend_value,  # type: ignore[arg-type]
+            ),
+        )
+        rows = [
+            [
+                row["date"],
+                row["media_id"],
+                row["file_name"],
+                row["captured_at"],
+                row.get("caption") or "",
+                row.get("ocr_preview") or "",
+                row["evidence_strength"],
+                row["score_components"]["final_score"],
+                ", ".join(row.get("evidence_types") or []),
+                row.get("thumbnail_path") or "",
+            ]
+            for row in report["results"]
+        ]
+        return format_multimodal_search(report), rows
 
     def _ask(question: str) -> tuple[str, list[list[str]], list[list[str]], str, int, int, int]:
         repository = _repository()
@@ -417,6 +465,163 @@ def create_app(db_path: str | Path | None = None):
             expected_date=_blank_or_none(expected_date),
         )
 
+    def _load_vlm_review_queue(
+        date_text: str,
+        from_text: str,
+        to_text: str,
+        status_value: str,
+        unreviewed: bool,
+        safety_flags: bool,
+        low_confidence: float | None,
+        limit_value: float | None,
+    ):
+        status = None if status_value == "all" else status_value
+        rows = list_vlm_review_items(
+            _repository(),
+            VlmReviewFilters(
+                date=_blank_or_none(date_text),
+                date_from=_blank_or_none(from_text),
+                date_to=_blank_or_none(to_text),
+                review_status=status,
+                unreviewed=unreviewed,
+                safety_flags=safety_flags,
+                low_confidence=low_confidence,
+                limit=_int_or_none(limit_value) or 100,
+            ),
+        )
+        choices = [str(row["media_id"]) for row in rows if row.get("media_id")]
+        selected = choices[0] if choices else None
+        return (
+            f"vlm review items={len(rows)}",
+            vlm_review_rows_for_dataframe(rows),
+            gr.update(choices=choices, value=selected),
+            *_vlm_detail_values(selected),
+        )
+
+    def _vlm_detail_values(media_id: str | None):
+        if not media_id:
+            return _empty_vlm_detail_values()
+        detail = get_vlm_review_detail(_repository(), media_id)
+        if not detail:
+            return _empty_vlm_detail_values()
+        return (
+            str(detail.get("caption") or ""),
+            str(detail.get("short_caption") or ""),
+            _tags_text(detail.get("scene_tags_json")),
+            _tags_text(detail.get("object_tags_json")),
+            _tags_text(detail.get("activity_tags_json")),
+            _tags_text(detail.get("food_cues_json")),
+            _tags_text(detail.get("location_cues_json")),
+            str(detail.get("review_status") or "unreviewed"),
+            str(detail.get("review_note") or ""),
+            bool(detail.get("is_verified")),
+            bool(detail.get("is_hidden")),
+            bool(detail.get("is_wrong")),
+            bool(detail.get("is_searchable", 1)),
+            bool(detail.get("is_event_usable", 1)),
+            str(detail.get("ocr_text_redacted") or detail.get("ocr_text") or ""),
+            _related_events_text(detail.get("related_events") or []),
+            "",
+        )
+
+    def _save_vlm_review(
+        media_id: str | None,
+        caption: str,
+        short_caption: str,
+        scene_tags: str,
+        object_tags: str,
+        activity_tags: str,
+        food_cues: str,
+        location_cues: str,
+        review_status: str,
+        review_note: str,
+        is_verified: bool,
+        is_hidden: bool,
+        is_wrong: bool,
+        is_searchable: bool,
+        is_event_usable: bool,
+    ):
+        if not media_id:
+            return (*_empty_vlm_detail_values()[:-1], "VLM結果が選択されていません。")
+        save_vlm_override(
+            _repository(),
+            VlmOverrideUpdate(
+                media_id=media_id,
+                caption_override=caption,
+                short_caption_override=short_caption,
+                scene_tags_override=parse_tag_text(scene_tags),
+                object_tags_override=parse_tag_text(object_tags),
+                activity_tags_override=parse_tag_text(activity_tags),
+                food_cues_override=parse_tag_text(food_cues),
+                location_cues_override=parse_tag_text(location_cues),
+                review_status=review_status or "unreviewed",
+                review_note=review_note,
+                is_verified=is_verified,
+                is_hidden=is_hidden,
+                is_wrong=is_wrong,
+                is_searchable=is_searchable,
+                is_event_usable=is_event_usable,
+            ),
+        )
+        values = _vlm_detail_values(media_id)
+        return (*values[:-1], "VLM overrideを保存しました。")
+
+    def _quick_vlm_action(media_id: str | None, action: str):
+        if not media_id:
+            return (*_empty_vlm_detail_values()[:-1], "VLM結果が選択されていません。")
+        updates: dict[str, Any] = {"media_id": media_id}
+        if action == "accepted":
+            updates.update(review_status="accepted", is_verified=True, is_hidden=False, is_wrong=False, is_searchable=True, is_event_usable=True)
+        elif action == "rejected":
+            updates.update(review_status="rejected", is_searchable=False, is_event_usable=False)
+        elif action == "wrong":
+            updates.update(review_status="wrong", is_wrong=True, is_searchable=False, is_event_usable=False)
+        elif action == "verified":
+            updates.update(is_verified=True)
+        elif action == "hidden":
+            updates.update(is_hidden=True)
+        elif action == "search_off":
+            updates.update(is_searchable=False)
+        elif action == "event_off":
+            updates.update(is_event_usable=False)
+        save_vlm_override(_repository(), VlmOverrideUpdate(**updates))
+        values = _vlm_detail_values(media_id)
+        return (*values[:-1], f"{action} を反映しました。")
+
+    def _clear_vlm_review(media_id: str | None):
+        if not media_id:
+            return (*_empty_vlm_detail_values()[:-1], "VLM結果が選択されていません。")
+        clear_vlm_override(_repository(), media_id)
+        values = _vlm_detail_values(media_id)
+        return (*values[:-1], "VLM overrideを削除しました。")
+
+    def _bulk_vlm_update(ids_text: str, action: str, tag_text: str) -> str:
+        ids = [line.strip() for line in ids_text.splitlines() if line.strip()]
+        kwargs: dict[str, Any] = {}
+        if action == "accepted":
+            kwargs.update(review_status="accepted", is_verified=True, is_searchable=True, is_event_usable=True)
+        elif action == "rejected":
+            kwargs.update(review_status="rejected", is_searchable=False, is_event_usable=False)
+        elif action == "wrong":
+            kwargs.update(review_status="wrong", is_wrong=True, is_searchable=False, is_event_usable=False)
+        elif action == "hidden":
+            kwargs.update(is_hidden=True)
+        elif action == "not_searchable":
+            kwargs.update(is_searchable=False)
+        elif action == "not_event_usable":
+            kwargs.update(is_event_usable=False)
+        elif action == "tag":
+            kwargs.update(add_tags=parse_tag_text(tag_text))
+        report = bulk_update_vlm_overrides(_repository(), ids, **kwargs)
+        return f"updated={report['updated']}"
+
+    def _make_vlm_eval_case(media_id: str | None, query_text: str) -> str:
+        return generate_vlm_eval_case(
+            media_id=media_id or None,
+            query=_blank_or_none(query_text),
+            expected_media_id=media_id or None,
+        )
+
     with gr.Blocks(title="personal_lifelog_rag") as app:
         gr.Markdown("# personal_lifelog_rag")
 
@@ -507,22 +712,6 @@ def create_app(db_path: str | Path | None = None):
                 label="Evidence LINE",
                 interactive=False,
             )
-
-        with gr.Tab("Image Search"):
-            image_query = gr.Textbox(label="Image query", value="ラーメン")
-            image_limit = gr.Number(label="limit", value=20, precision=0)
-            image_search_button = gr.Button("Search Images")
-            image_search_summary = gr.Textbox(label="Result summary", lines=10, interactive=False)
-            image_search_table = gr.Dataframe(
-                headers=["date", "media_id", "file_name", "captured_at", "caption", "OCR", "matched fields", "thumbnail_path"],
-                label="Image results",
-                interactive=False,
-            )
-            image_search_button.click(
-                _image_search_ui,
-                inputs=[image_query, image_limit],
-                outputs=[image_search_summary, image_search_table],
-            )
             photo_evidence = gr.Dataframe(
                 headers=["captured_at", "file_name", "thumbnail_path", "gps"],
                 label="Evidence Photos",
@@ -541,6 +730,202 @@ def create_app(db_path: str | Path | None = None):
                     event_count_box,
                 ],
             )
+
+        with gr.Tab("Image Search"):
+            image_query = gr.Textbox(label="Image query", value="ラーメン")
+            image_limit = gr.Number(label="limit", value=20, precision=0)
+            image_search_button = gr.Button("Search Images")
+            image_search_summary = gr.Textbox(label="Result summary", lines=10, interactive=False)
+            image_search_table = gr.Dataframe(
+                headers=["date", "media_id", "file_name", "captured_at", "caption", "OCR", "matched fields", "thumbnail_path"],
+                label="Image results",
+                interactive=False,
+            )
+            image_search_button.click(
+                _image_search_ui,
+                inputs=[image_query, image_limit],
+                outputs=[image_search_summary, image_search_table],
+            )
+
+        with gr.Tab("Multimodal Search"):
+            mm_query = gr.Textbox(label="Query", value="ご飯を食べた写真")
+            with gr.Row():
+                mm_backend = gr.Dropdown(label="backend", choices=["sql", "vlm_sql", "embedding", "hybrid"], value="hybrid")
+                mm_from = gr.Textbox(label="date_from", placeholder="YYYY-MM-DD")
+                mm_to = gr.Textbox(label="date_to", placeholder="YYYY-MM-DD")
+                mm_limit = gr.Number(label="limit", value=10, precision=0)
+            mm_button = gr.Button("Search")
+            mm_summary = gr.Textbox(label="Summary", lines=12, interactive=False)
+            mm_table = gr.Dataframe(
+                headers=[
+                    "date",
+                    "media_id",
+                    "file_name",
+                    "captured_at",
+                    "caption",
+                    "OCR",
+                    "evidence_strength",
+                    "score",
+                    "evidence_types",
+                    "thumbnail_path",
+                ],
+                label="Multimodal results",
+                interactive=False,
+            )
+            mm_button.click(
+                _multimodal_search_ui,
+                inputs=[mm_query, mm_backend, mm_from, mm_to, mm_limit],
+                outputs=[mm_summary, mm_table],
+            )
+
+        with gr.Tab("VLM Review / 画像解析レビュー"):
+            gr.Markdown("画像解析による推定を確認し、検索・イベント生成に使うかを管理します。")
+            with gr.Row():
+                vlmr_date = gr.Textbox(label="date", placeholder="YYYY-MM-DD")
+                vlmr_from = gr.Textbox(label="date_from", placeholder="YYYY-MM-DD")
+                vlmr_to = gr.Textbox(label="date_to", placeholder="YYYY-MM-DD")
+                vlmr_status = gr.Dropdown(
+                    label="review_status",
+                    choices=["all", "unreviewed", "accepted", "rejected", "needs_fix", "wrong"],
+                    value="all",
+                )
+            with gr.Row():
+                vlmr_unreviewed = gr.Checkbox(label="unreviewed only", value=False)
+                vlmr_safety = gr.Checkbox(label="safety_flagsあり", value=False)
+                vlmr_low_conf = gr.Number(label="confidence <=", value=None)
+                vlmr_limit = gr.Number(label="limit", value=100, precision=0)
+            load_vlm_review_button = gr.Button("VLM Review Queue 読み込み")
+            vlmr_summary = gr.Textbox(label="Review summary", interactive=False)
+            vlmr_table = gr.Dataframe(
+                headers=[
+                    "media_id",
+                    "captured_at",
+                    "file_name",
+                    "thumbnail_path",
+                    "short_caption",
+                    "confidence",
+                    "safety_flags",
+                    "scene_tags",
+                    "activity_tags",
+                    "food_cues",
+                    "location_cues",
+                    "review_status",
+                    "verified",
+                    "hidden",
+                    "wrong",
+                    "searchable",
+                    "event_usable",
+                ],
+                label="VLM review queue",
+                interactive=False,
+            )
+            selected_vlm_media_id = gr.Dropdown(label="media_id", choices=[], value=None)
+            with gr.Row():
+                vlmr_caption = gr.Textbox(label="caption_override", lines=3)
+                vlmr_short_caption = gr.Textbox(label="short_caption_override", lines=2)
+            with gr.Row():
+                vlmr_scene_tags = gr.Textbox(label="scene_tags", placeholder="indoor, restaurant")
+                vlmr_object_tags = gr.Textbox(label="object_tags")
+                vlmr_activity_tags = gr.Textbox(label="activity_tags")
+            with gr.Row():
+                vlmr_food_cues = gr.Textbox(label="food_cues")
+                vlmr_location_cues = gr.Textbox(label="location_cues")
+            with gr.Row():
+                vlmr_status_edit = gr.Dropdown(
+                    label="review_status",
+                    choices=["unreviewed", "accepted", "rejected", "needs_fix", "wrong"],
+                    value="unreviewed",
+                )
+                vlmr_verified = gr.Checkbox(label="verified")
+                vlmr_hidden = gr.Checkbox(label="hidden")
+                vlmr_wrong = gr.Checkbox(label="wrong")
+                vlmr_searchable = gr.Checkbox(label="use in search", value=True)
+                vlmr_event_usable = gr.Checkbox(label="use in events", value=True)
+            vlmr_note = gr.Textbox(label="review_note", lines=2)
+            with gr.Row():
+                save_vlm_review_button = gr.Button("Save override")
+                accept_vlm_button = gr.Button("Accept")
+                reject_vlm_button = gr.Button("Reject")
+                wrong_vlm_button = gr.Button("Mark wrong")
+                verified_vlm_button = gr.Button("Mark verified")
+                hide_vlm_button = gr.Button("Hide")
+                search_off_vlm_button = gr.Button("Search OFF")
+                event_off_vlm_button = gr.Button("Events OFF")
+                clear_vlm_button = gr.Button("Clear override")
+            vlmr_status_box = gr.Textbox(label="Save status", interactive=False)
+            vlmr_ocr = gr.Textbox(label="OCR preview", lines=3, interactive=False)
+            vlmr_related_events = gr.Textbox(label="Related events", lines=3, interactive=False)
+            gr.Markdown("## Bulk Actions")
+            vlmr_bulk_ids = gr.Textbox(label="media_idを複数行で入力", lines=4)
+            with gr.Row():
+                vlmr_bulk_action = gr.Dropdown(
+                    label="bulk action",
+                    choices=["accepted", "rejected", "wrong", "hidden", "not_searchable", "not_event_usable", "tag"],
+                    value="accepted",
+                )
+                vlmr_bulk_tag = gr.Textbox(label="bulk tag")
+                vlmr_bulk_button = gr.Button("Bulk update")
+            vlmr_bulk_status = gr.Textbox(label="Bulk status", interactive=False)
+            vlmr_eval_query = gr.Textbox(label="eval query", value="ご飯を食べた写真")
+            vlmr_eval_button = gr.Button("Generate VLM eval case")
+            vlmr_eval_yaml = gr.Textbox(label="eval case YAML", lines=8, interactive=False)
+
+            vlm_detail_outputs = [
+                vlmr_caption,
+                vlmr_short_caption,
+                vlmr_scene_tags,
+                vlmr_object_tags,
+                vlmr_activity_tags,
+                vlmr_food_cues,
+                vlmr_location_cues,
+                vlmr_status_edit,
+                vlmr_note,
+                vlmr_verified,
+                vlmr_hidden,
+                vlmr_wrong,
+                vlmr_searchable,
+                vlmr_event_usable,
+                vlmr_ocr,
+                vlmr_related_events,
+                vlmr_status_box,
+            ]
+            load_vlm_review_button.click(
+                _load_vlm_review_queue,
+                inputs=[vlmr_date, vlmr_from, vlmr_to, vlmr_status, vlmr_unreviewed, vlmr_safety, vlmr_low_conf, vlmr_limit],
+                outputs=[vlmr_summary, vlmr_table, selected_vlm_media_id, *vlm_detail_outputs],
+            )
+            selected_vlm_media_id.change(_vlm_detail_values, inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            save_vlm_review_button.click(
+                _save_vlm_review,
+                inputs=[
+                    selected_vlm_media_id,
+                    vlmr_caption,
+                    vlmr_short_caption,
+                    vlmr_scene_tags,
+                    vlmr_object_tags,
+                    vlmr_activity_tags,
+                    vlmr_food_cues,
+                    vlmr_location_cues,
+                    vlmr_status_edit,
+                    vlmr_note,
+                    vlmr_verified,
+                    vlmr_hidden,
+                    vlmr_wrong,
+                    vlmr_searchable,
+                    vlmr_event_usable,
+                ],
+                outputs=vlm_detail_outputs,
+            )
+            accept_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "accepted"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            reject_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "rejected"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            wrong_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "wrong"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            verified_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "verified"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            hide_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "hidden"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            search_off_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "search_off"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            event_off_vlm_button.click(lambda media_id: _quick_vlm_action(media_id, "event_off"), inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            clear_vlm_button.click(_clear_vlm_review, inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
+            vlmr_bulk_button.click(_bulk_vlm_update, inputs=[vlmr_bulk_ids, vlmr_bulk_action, vlmr_bulk_tag], outputs=vlmr_bulk_status)
+            vlmr_eval_button.click(_make_vlm_eval_case, inputs=[selected_vlm_media_id, vlmr_eval_query], outputs=vlmr_eval_yaml)
 
         with gr.Tab("Events / Timeline"):
             event_date = gr.Textbox(label="Date", value="2024-12-24", placeholder="YYYY-MM-DD")
@@ -860,6 +1245,37 @@ def _empty_event_detail_values():
         [],
         [],
         "",
+    )
+
+
+def _empty_vlm_detail_values():
+    return (
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "unreviewed",
+        "",
+        False,
+        False,
+        False,
+        True,
+        True,
+        "",
+        "",
+        "",
+    )
+
+
+def _related_events_text(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    return "\n".join(
+        f"{row.get('event_id')}: {row.get('start_time') or ''}-{row.get('end_time') or ''} {row.get('title') or ''}"
+        for row in rows[:10]
     )
 
 

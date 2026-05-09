@@ -1,0 +1,90 @@
+# Example only: anonymized baseline cases for a single local evaluation date.
+# Copy to private_eval/questions_20241224.yaml and edit with your real local expectations.
+# Do not put raw LINE text, exact GPS, file paths, or real photos in committed configs.
+
+cases:
+  - id: date_20241224_summary_example
+    type: date_qa
+    question: "2024年12月24日は何していた？"
+    expected_dates:
+      - "2024-12-24"
+    expected_min_events: 3
+    expected_evidence_types:
+      - "line"
+      - "photo"
+      - "vlm"
+    should_not_include:
+      - "確実に"
+      - "断定"
+      - "デートしていた"
+
+  - id: place_20241224_place_1_example
+    type: routed_qa
+    question: "PLACE_1に行ったのはいつ？"
+    expected_intent: "place_visit"
+    expected_top_dates:
+      - "2024-12-24"
+    expected_classification:
+      "2024-12-24": "actual_or_likely_action"
+    should_not_include:
+      - "確実にPLACE_1に行った"
+
+  - id: mm_food_photo_20241224_example
+    type: multimodal_search
+    query: "ご飯を食べた写真"
+    expected_top_dates:
+      - "2024-12-24"
+    expected_evidence_types_any:
+      - "vlm"
+      - "event"
+    expected_min_results: 1
+    max_vlm_only_confidence: "中"
+    should_not_include:
+      - "確実に食べた"
+
+  - id: image_food_20241224_example
+    type: image_search
+    query: "ご飯"
+    expected_top_dates:
+      - "2024-12-24"
+    expected_evidence_types:
+      - "vlm"
+    expected_min_results: 1
+    should_not_include:
+      - "確実に食べた"
+
+  - id: vlm_quality_20241224_example
+    type: vlm_quality
+    date: "2024-12-24"
+    expected_min_vlm_success: 20
+    expected_engine: "qwen3_vl_transformers"
+    forbidden_terms:
+      - "彼女"
+      - "恋人"
+      - "家族"
+      - "病気"
+      - "宗教"
+      - "政治"
+    allowed_safety_flags:
+      - "people_present"
+      - "no_people_present"
+
+  - id: event_quality_20241224_example
+    type: event_quality
+    date: "2024-12-24"
+    expected_min_events: 3
+    expected_max_events: 8
+    expected_evidence_types:
+      - "line"
+      - "photo"
+      - "vlm"
+    max_vlm_only_high_confidence_events: 0
+    no_orphan_evidence: true
+
+  - id: call_20241224_example
+    type: call_search
+    filters:
+      date: "2024-12-24"
+      completed: true
+    expected_min_results: 1
+    expected_status: "completed"

@@ -80,8 +80,12 @@ def test_repository_inserts_and_counts_rows(tmp_path: Path) -> None:
         "event_evidence": 2,
         "line_call_events": 0,
         "media_ocr": 0,
-        "media_vlm": 0,
-    }
+            "media_vlm": 0,
+            "media_vlm_overrides": 0,
+            "media_embeddings": 0,
+            "analysis_jobs": 0,
+            "analysis_job_items": 0,
+        }
 
 
 def test_media_items_are_deduplicated_by_file_hash(tmp_path: Path) -> None:

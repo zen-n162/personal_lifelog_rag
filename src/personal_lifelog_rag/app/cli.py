@@ -9,6 +9,28 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from personal_lifelog_rag.benchmark.benchmark_report import (
+    DEFAULT_BENCHMARK_OUTPUT_DIR,
+    assemble_report,
+    build_multimodal_benchmark_report,
+    format_benchmark_summary,
+    format_model_info,
+    model_info,
+    write_benchmark_report,
+)
+from personal_lifelog_rag.benchmark.embedding_benchmark import (
+    benchmark_image_embedding,
+    engine_from_spec as embedding_engine_from_spec,
+)
+from personal_lifelog_rag.benchmark.schemas import (
+    ModelRuntimeConfig,
+    load_benchmark_cases,
+    load_model_runtime_config,
+)
+from personal_lifelog_rag.benchmark.vlm_benchmark import (
+    benchmark_vlm,
+    engine_from_spec as vlm_engine_from_spec,
+)
 from personal_lifelog_rag.captioning.image_analysis import analyze_images, format_analysis_report
 from personal_lifelog_rag.captioning.local_vlm import get_vlm_adapter
 from personal_lifelog_rag.core.config import load_event_building_config
@@ -17,6 +39,22 @@ from personal_lifelog_rag.db.backup import DEFAULT_BACKUP_DIR, backup_sqlite_db
 from personal_lifelog_rag.db.checks import format_db_check, run_db_check
 from personal_lifelog_rag.db.repository import LifelogRepository, resolve_db_path
 from personal_lifelog_rag.embeddings.adapter import get_embedding_adapter
+from personal_lifelog_rag.embeddings.embedding_service import (
+    build_image_embeddings,
+    build_text_embeddings,
+    embedding_stats,
+    format_embedding_build_report,
+    format_embedding_stats,
+)
+from personal_lifelog_rag.embeddings.engines import get_multimodal_embedding_engine
+from personal_lifelog_rag.embeddings.multimodal_search import (
+    format_multimodal_search,
+    multimodal_search,
+)
+from personal_lifelog_rag.embeddings.schemas import (
+    BuildMediaEmbeddingsOptions,
+    MultimodalSearchOptions,
+)
 from personal_lifelog_rag.embeddings.vector_search import (
     build_embeddings,
 )
@@ -31,6 +69,10 @@ from personal_lifelog_rag.evaluation.private_eval import (
     write_private_eval_report,
     write_private_eval_template,
 )
+from personal_lifelog_rag.evaluation.private_eval_templates import (
+    format_private_eval_template_summary,
+    write_private_eval_template_for_date,
+)
 from personal_lifelog_rag.evaluation.search_snapshot import (
     DEFAULT_SEARCH_SNAPSHOT_DIR,
     DEFAULT_SEARCH_SNAPSHOT_QUERIES,
@@ -38,6 +80,11 @@ from personal_lifelog_rag.evaluation.search_snapshot import (
     build_search_snapshot,
     format_search_snapshot,
     write_search_snapshot,
+)
+from personal_lifelog_rag.env_check import format_env_check, run_env_check
+from personal_lifelog_rag.fake_analysis_cleanup import (
+    cleanup_fake_analysis,
+    format_cleanup_fake_analysis,
 )
 from personal_lifelog_rag.ingest.line_parser import parse_line_chat_file_with_warnings
 from personal_lifelog_rag.ingest.photo_ingest import ingest_photo_directory_with_report
@@ -49,6 +96,29 @@ from personal_lifelog_rag.line.call_index import (
     format_search_calls_report,
     search_calls,
 )
+from personal_lifelog_rag.jobs.job_repository import AnalysisJobRepository
+from personal_lifelog_rag.jobs.job_service import (
+    dumps_json,
+    format_analysis_cleanup,
+    format_analysis_plan,
+    format_analysis_run_report,
+    format_analysis_status,
+)
+from personal_lifelog_rag.jobs.planners import plan_analysis
+from personal_lifelog_rag.jobs.runners import (
+    DEFAULT_ANALYSIS_JOB_OUTPUT_DIR,
+    resume_analysis_job,
+    retry_failed_analysis,
+    run_analysis_job,
+)
+from personal_lifelog_rag.jobs.schemas import AnalysisPlanOptions, AnalysisRunOptions
+from personal_lifelog_rag.jobs.storage import (
+    format_db_maintenance,
+    format_storage_stats,
+    run_db_maintenance,
+    storage_stats,
+)
+from personal_lifelog_rag.model_diagnostics import format_model_diagnostics, run_model_diagnostics
 from personal_lifelog_rag.ocr.local_ocr import get_ocr_adapter
 from personal_lifelog_rag.ocr.engines import get_ocr_engine
 from personal_lifelog_rag.ocr.ocr_service import (
@@ -95,6 +165,8 @@ from personal_lifelog_rag.retrieval.query_router import (
     format_routed_query_result,
     route_query,
 )
+from personal_lifelog_rag.reporting.report_builder import DEFAULT_REPORTS_DIR, build_report, write_report
+from personal_lifelog_rag.reporting.schemas import ReportOptions
 from personal_lifelog_rag.retrieval.temporal_search import search_timeline
 from personal_lifelog_rag.timeline.event_builder import EventBuildConfig, build_all_events, build_events
 from personal_lifelog_rag.timeline.event_reports import (
@@ -102,6 +174,15 @@ from personal_lifelog_rag.timeline.event_reports import (
     format_event_list,
     format_event_stats,
     list_events_report,
+)
+from personal_lifelog_rag.timeline.event_rebuild_analysis import (
+    DEFAULT_EVENT_REBUILD_OUTPUT_DIR,
+    EventRebuildOptions,
+    diff_event_snapshots,
+    format_event_diff,
+    format_event_rebuild_report,
+    load_snapshot_or_report,
+    rebuild_events_with_analysis,
 )
 from personal_lifelog_rag.ui.event_review import save_event_review_override
 from personal_lifelog_rag.ui.event_review_service import (
@@ -112,7 +193,30 @@ from personal_lifelog_rag.ui.event_review_service import (
     review_queue,
 )
 from personal_lifelog_rag.vlm.engines import get_vlm_engine
+from personal_lifelog_rag.vlm.prompts import get_vlm_prompt_template
+from personal_lifelog_rag.vlm.safety import safety_check_text
+from personal_lifelog_rag.vlm.pilot import VlmPilotOptions, run_vlm_pilot
+from personal_lifelog_rag.vlm.pilot_report import (
+    DEFAULT_VLM_PILOT_OUTPUT_DIR,
+    format_vlm_pilot_report,
+)
+from personal_lifelog_rag.vlm.review_service import (
+    VlmOverrideUpdate,
+    VlmReviewFilters,
+    bulk_update_vlm_overrides,
+    clear_vlm_override,
+    format_vlm_review_queue,
+    generate_vlm_eval_case,
+    list_vlm_review_items,
+    parse_tag_text,
+    save_vlm_override,
+)
 from personal_lifelog_rag.vlm.schemas import ImageSearchOptions
+from personal_lifelog_rag.vlm.status_cleanup import (
+    VALID_CLEANUP_STATUSES,
+    cleanup_vlm_status,
+    format_cleanup_vlm_status,
+)
 from personal_lifelog_rag.vlm.vlm_service import (
     VlmImagesOptions,
     format_image_search,
@@ -158,6 +262,158 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup_db_parser.add_argument("--label", default=None)
     backup_db_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BACKUP_DIR)
+
+    analysis_plan_parser = subparsers.add_parser(
+        "analysis-plan",
+        parents=[db_parent],
+        help="Plan local OCR/VLM/embedding/event analysis work before running it.",
+    )
+    _add_analysis_target_args(analysis_plan_parser)
+    _add_analysis_filter_args(analysis_plan_parser)
+    analysis_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    analysis_run_parser = subparsers.add_parser(
+        "analysis-run",
+        parents=[db_parent],
+        help="Run a local analysis job with DB-backed progress metadata.",
+    )
+    _add_analysis_target_args(analysis_run_parser)
+    _add_analysis_filter_args(analysis_run_parser)
+    analysis_run_parser.add_argument("--dry-run", action="store_true")
+    analysis_run_parser.add_argument("--job-id", default=None)
+    analysis_run_parser.add_argument("--save-report", action="store_true")
+    analysis_run_parser.add_argument("--output-dir", type=Path, default=DEFAULT_ANALYSIS_JOB_OUTPUT_DIR)
+    analysis_run_parser.add_argument("--allow-fake-write", action="store_true")
+    analysis_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    analysis_status_parser = subparsers.add_parser(
+        "analysis-status",
+        parents=[db_parent],
+        help="Show recent analysis jobs or one job with item status.",
+    )
+    analysis_status_parser.add_argument("--job-id", default=None)
+    analysis_status_parser.add_argument("--recent", type=int, default=10)
+    analysis_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    analysis_resume_parser = subparsers.add_parser(
+        "analysis-resume",
+        parents=[db_parent],
+        help="Resume a prior analysis job by planning remaining failed/unavailable items.",
+    )
+    analysis_resume_parser.add_argument("--job-id", required=True)
+    analysis_resume_parser.add_argument("--failed-only", action="store_true")
+    analysis_resume_parser.add_argument("--engine-unavailable-only", action="store_true")
+    analysis_resume_parser.add_argument("--limit", type=int, default=None)
+    analysis_resume_parser.add_argument("--dry-run", action="store_true")
+    analysis_resume_parser.add_argument("--save-report", action="store_true")
+    analysis_resume_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    analysis_retry_parser = subparsers.add_parser(
+        "analysis-retry-failed",
+        parents=[db_parent],
+        help="Retry failed analysis rows either from a previous job or a fresh scope.",
+    )
+    analysis_retry_parser.add_argument("--job-id", default=None)
+    _add_analysis_target_args(analysis_retry_parser, required_type=False)
+    _add_analysis_filter_args(analysis_retry_parser)
+    analysis_retry_parser.add_argument("--dry-run", action="store_true")
+    analysis_retry_parser.add_argument("--save-report", action="store_true")
+    analysis_retry_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    analysis_cleanup_parser = subparsers.add_parser(
+        "analysis-cleanup",
+        parents=[db_parent],
+        help="Safely clean analysis job metadata; real deletion requires --yes.",
+    )
+    analysis_cleanup_parser.add_argument("--dry-run", action="store_true")
+    analysis_cleanup_parser.add_argument("--failed", action="store_true")
+    analysis_cleanup_parser.add_argument("--engine-unavailable", action="store_true")
+    analysis_cleanup_parser.add_argument("--old-runs", type=int, default=None)
+    analysis_cleanup_parser.add_argument("--yes", action="store_true")
+    analysis_cleanup_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    storage_stats_parser = subparsers.add_parser(
+        "storage-stats",
+        parents=[db_parent],
+        help="Show local DB/artifact storage usage without exposing private content.",
+    )
+    storage_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    db_maintenance_parser = subparsers.add_parser(
+        "db-maintenance",
+        parents=[db_parent],
+        help="Run safe SQLite backup/vacuum maintenance.",
+    )
+    db_maintenance_parser.add_argument("--backup", action="store_true")
+    db_maintenance_parser.add_argument("--vacuum", action="store_true")
+    db_maintenance_parser.add_argument("--yes", action="store_true")
+    db_maintenance_parser.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
+    db_maintenance_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    model_diagnostics_parser = subparsers.add_parser(
+        "model-diagnostics",
+        help="Diagnose configured local Qwen VLM/embedding runtimes without loading model weights.",
+    )
+    model_diagnostics_parser.add_argument("--config", type=Path, default=None)
+    model_diagnostics_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    cleanup_fake_parser = subparsers.add_parser(
+        "cleanup-fake-analysis",
+        parents=[db_parent],
+        help="Remove test-only fake VLM/embedding rows; real deletion requires --yes.",
+    )
+    cleanup_fake_parser.add_argument("--dry-run", action="store_true")
+    cleanup_fake_parser.add_argument("--yes", action="store_true")
+    cleanup_fake_parser.add_argument("--include-engine-unavailable", action="store_true")
+    cleanup_fake_parser.add_argument("--date", default=None)
+    cleanup_fake_parser.add_argument("--from", dest="from_date", default=None)
+    cleanup_fake_parser.add_argument("--to", dest="to_date", default=None)
+    cleanup_fake_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    cleanup_vlm_status_parser = subparsers.add_parser(
+        "cleanup-vlm-status",
+        parents=[db_parent],
+        help="Remove selected non-fake VLM status rows and related VLM event evidence; real deletion requires --yes.",
+    )
+    cleanup_vlm_status_parser.add_argument("--date", default=None)
+    cleanup_vlm_status_parser.add_argument("--from", dest="from_date", default=None)
+    cleanup_vlm_status_parser.add_argument("--to", dest="to_date", default=None)
+    cleanup_vlm_status_parser.add_argument("--engine", default=None)
+    cleanup_vlm_status_parser.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=sorted(VALID_CLEANUP_STATUSES),
+        default=None,
+    )
+    cleanup_vlm_status_parser.add_argument("--dry-run", action="store_true")
+    cleanup_vlm_status_parser.add_argument("--yes", action="store_true")
+    cleanup_vlm_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    env_check_parser = subparsers.add_parser(
+        "env-check",
+        help="Check active Python, conda, package, and local model-path health.",
+    )
+    env_check_parser.add_argument("--config", type=Path, default=None)
+    env_check_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    generate_report_parser = subparsers.add_parser(
+        "generate-report",
+        parents=[db_parent],
+        help="Generate a privacy-preserving Markdown evaluation report for research/portfolio use.",
+    )
+    generate_report_parser.add_argument("--from", dest="from_date", default=None)
+    generate_report_parser.add_argument("--to", dest="to_date", default=None)
+    mode_group = generate_report_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--public", action="store_true", dest="public_mode")
+    mode_group.add_argument("--private", action="store_true", dest="private_mode")
+    generate_report_parser.add_argument("--eval-path", type=Path, default=None)
+    generate_report_parser.add_argument("--eval-run", type=Path, default=None)
+    generate_report_parser.add_argument("--output", type=Path, default=None)
+    examples_group = generate_report_parser.add_mutually_exclusive_group()
+    examples_group.add_argument("--include-examples", action="store_true", dest="include_examples")
+    examples_group.add_argument("--no-examples", action="store_true", dest="no_examples")
+    generate_report_parser.add_argument("--save-json", action="store_true")
 
     ingest_line_parser = subparsers.add_parser(
         "ingest-line",
@@ -298,6 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_images_parser.add_argument("--limit", type=int, default=100)
     analyze_images_parser.add_argument("--engine", default=None)
     analyze_images_parser.add_argument("--model", default=None)
+    analyze_images_parser.add_argument("--config", type=Path, default=None)
     analyze_images_parser.add_argument("--dry-run", action="store_true")
     analyze_images_parser.add_argument("--force", action="store_true")
     analyze_images_parser.add_argument("--skip-existing", action="store_true")
@@ -306,6 +563,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_images_parser.add_argument("--ocr-backend", default=None)
     analyze_images_parser.add_argument("--vlm-backend", default=None)
     analyze_images_parser.add_argument("--vlm-model", default=None)
+    analyze_images_parser.add_argument("--prompt-template", default=None)
+    analyze_images_parser.add_argument("--allow-fake-write", action="store_true")
 
     vlm_stats_parser = subparsers.add_parser(
         "vlm-stats",
@@ -325,6 +584,80 @@ def build_parser() -> argparse.ArgumentParser:
     vlm_show_parser.add_argument("--date", default=None)
     vlm_show_parser.add_argument("--limit", type=int, default=10)
     vlm_show_parser.add_argument("--full", action="store_true")
+    vlm_show_parser.add_argument("--show-errors", action="store_true")
+
+    vlm_review_parser = subparsers.add_parser(
+        "vlm-review-queue",
+        parents=[db_parent],
+        help="List local VLM records that need human review.",
+    )
+    vlm_review_parser.add_argument("--date", default=None)
+    vlm_review_parser.add_argument("--from", dest="from_date", default=None)
+    vlm_review_parser.add_argument("--to", dest="to_date", default=None)
+    vlm_review_parser.add_argument("--status", default=None)
+    vlm_review_parser.add_argument("--unreviewed", action="store_true")
+    vlm_review_parser.add_argument("--safety-flags", action="store_true")
+    vlm_review_parser.add_argument("--people-present", action="store_true")
+    vlm_review_parser.add_argument("--low-confidence", type=float, default=None)
+    vlm_review_parser.add_argument("--food-cues", action="store_true")
+    vlm_review_parser.add_argument("--location-cues", action="store_true")
+    vlm_review_parser.add_argument("--ocr", action="store_true", dest="has_ocr")
+    vlm_review_parser.add_argument("--embedding", action="store_true", dest="has_embedding")
+    vlm_review_parser.add_argument("--hidden", action="store_true")
+    vlm_review_parser.add_argument("--wrong", action="store_true")
+    vlm_review_parser.add_argument("--limit", type=int, default=50)
+    vlm_review_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    update_vlm_parser = subparsers.add_parser(
+        "update-vlm-result",
+        parents=[db_parent],
+        help="Save a local human review override for one VLM result.",
+    )
+    update_vlm_parser.add_argument("media_id")
+    update_vlm_parser.add_argument("--caption", default=None)
+    update_vlm_parser.add_argument("--short-caption", default=None)
+    update_vlm_parser.add_argument("--tag", action="append", default=[])
+    update_vlm_parser.add_argument("--scene-tag", action="append", default=[])
+    update_vlm_parser.add_argument("--object-tag", action="append", default=[])
+    update_vlm_parser.add_argument("--activity-tag", action="append", default=[])
+    update_vlm_parser.add_argument("--location-cue", action="append", default=[])
+    update_vlm_parser.add_argument("--accepted", action="store_true")
+    update_vlm_parser.add_argument("--rejected", action="store_true")
+    update_vlm_parser.add_argument("--wrong", action="store_true")
+    update_vlm_parser.add_argument("--needs-fix", action="store_true")
+    update_vlm_parser.add_argument("--verified", action="store_true")
+    update_vlm_parser.add_argument("--hidden", action="store_true")
+    update_vlm_parser.add_argument("--not-searchable", action="store_true")
+    update_vlm_parser.add_argument("--not-event-usable", action="store_true")
+    update_vlm_parser.add_argument("--note", default=None)
+    update_vlm_parser.add_argument("--clear-override", action="store_true")
+    update_vlm_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    bulk_vlm_parser = subparsers.add_parser(
+        "bulk-update-vlm-results",
+        parents=[db_parent],
+        help="Apply one VLM review action to multiple media ids.",
+    )
+    bulk_vlm_parser.add_argument("--media-id", action="append", default=[])
+    bulk_vlm_parser.add_argument("--from-file", type=Path, default=None)
+    bulk_vlm_parser.add_argument("--accepted", action="store_true")
+    bulk_vlm_parser.add_argument("--rejected", action="store_true")
+    bulk_vlm_parser.add_argument("--wrong", action="store_true")
+    bulk_vlm_parser.add_argument("--verified", action="store_true")
+    bulk_vlm_parser.add_argument("--hidden", action="store_true")
+    bulk_vlm_parser.add_argument("--not-searchable", action="store_true")
+    bulk_vlm_parser.add_argument("--not-event-usable", action="store_true")
+    bulk_vlm_parser.add_argument("--tag", action="append", default=[])
+    bulk_vlm_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    make_vlm_eval_parser = subparsers.add_parser(
+        "make-vlm-eval-case",
+        parents=[db_parent],
+        help="Print a private eval YAML snippet for a reviewed VLM result.",
+    )
+    make_vlm_eval_parser.add_argument("--media-id", default=None)
+    make_vlm_eval_parser.add_argument("--query", default=None)
+    make_vlm_eval_parser.add_argument("--expected-media-id", default=None)
 
     image_search_parser = subparsers.add_parser(
         "image-search",
@@ -335,7 +668,156 @@ def build_parser() -> argparse.ArgumentParser:
     image_search_parser.add_argument("--from", dest="from_date", default=None)
     image_search_parser.add_argument("--to", dest="to_date", default=None)
     image_search_parser.add_argument("--limit", type=int, default=20)
+    image_search_parser.add_argument("--backend", choices=["sql", "vlm_sql", "embedding", "hybrid"], default="sql")
+    image_search_parser.add_argument("--include-hidden", action="store_true")
     image_search_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    build_image_embeddings_parser = subparsers.add_parser(
+        "build-image-embeddings",
+        parents=[db_parent],
+        help="Build local image embeddings for imported media without external APIs.",
+    )
+    build_image_embeddings_parser.add_argument("--date", default=None)
+    build_image_embeddings_parser.add_argument("--from", dest="from_date", default=None)
+    build_image_embeddings_parser.add_argument("--to", dest="to_date", default=None)
+    build_image_embeddings_parser.add_argument("--limit", type=int, default=100)
+    build_image_embeddings_parser.add_argument("--engine", default=None)
+    build_image_embeddings_parser.add_argument("--model", default=None)
+    build_image_embeddings_parser.add_argument("--model-path", default=None)
+    build_image_embeddings_parser.add_argument("--config", type=Path, default=None)
+    build_image_embeddings_parser.add_argument("--dry-run", action="store_true")
+    build_image_embeddings_parser.add_argument("--force", action="store_true")
+    build_image_embeddings_parser.add_argument("--skip-existing", action="store_true")
+    build_image_embeddings_parser.add_argument("--allow-fake-write", action="store_true")
+
+    build_text_embeddings_parser = subparsers.add_parser(
+        "build-text-embeddings",
+        parents=[db_parent],
+        help="Build local media text embeddings from OCR/VLM caption metadata.",
+    )
+    build_text_embeddings_parser.add_argument("--date", default=None)
+    build_text_embeddings_parser.add_argument("--from", dest="from_date", default=None)
+    build_text_embeddings_parser.add_argument("--to", dest="to_date", default=None)
+    build_text_embeddings_parser.add_argument("--limit", type=int, default=100)
+    build_text_embeddings_parser.add_argument("--type", choices=["caption", "ocr", "combined_text"], default="combined_text")
+    build_text_embeddings_parser.add_argument("--engine", default=None)
+    build_text_embeddings_parser.add_argument("--model", default=None)
+    build_text_embeddings_parser.add_argument("--model-path", default=None)
+    build_text_embeddings_parser.add_argument("--config", type=Path, default=None)
+    build_text_embeddings_parser.add_argument("--dry-run", action="store_true")
+    build_text_embeddings_parser.add_argument("--force", action="store_true")
+    build_text_embeddings_parser.add_argument("--skip-existing", action="store_true")
+    build_text_embeddings_parser.add_argument("--allow-fake-write", action="store_true")
+
+    embedding_stats_parser = subparsers.add_parser(
+        "embedding-stats",
+        parents=[db_parent],
+        help="Show local media embedding coverage and status counts.",
+    )
+    embedding_stats_parser.add_argument("--from", dest="from_date", default=None)
+    embedding_stats_parser.add_argument("--to", dest="to_date", default=None)
+    embedding_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    multimodal_search_parser = subparsers.add_parser(
+        "multimodal-search",
+        parents=[db_parent],
+        help="Search images with local embeddings plus OCR/VLM/LINE/event reranking.",
+    )
+    multimodal_search_parser.add_argument("query")
+    multimodal_search_parser.add_argument("--from", dest="from_date", default=None)
+    multimodal_search_parser.add_argument("--to", dest="to_date", default=None)
+    multimodal_search_parser.add_argument("--limit", type=int, default=10)
+    multimodal_search_parser.add_argument("--backend", choices=["sql", "vlm_sql", "embedding", "hybrid"], default="hybrid")
+    multimodal_search_parser.add_argument("--engine", default=None)
+    multimodal_search_parser.add_argument("--model", default=None)
+    multimodal_search_parser.add_argument("--model-path", default=None)
+    multimodal_search_parser.add_argument("--config", type=Path, default=None)
+    multimodal_search_parser.add_argument("--include-hidden", action="store_true")
+    multimodal_search_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    vlm_prompt_parser = subparsers.add_parser(
+        "vlm-prompt",
+        help="Print a local VLM prompt template for dry-run review.",
+    )
+    vlm_prompt_parser.add_argument("--template", required=True)
+    vlm_prompt_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    vlm_safety_parser = subparsers.add_parser(
+        "vlm-safety-check",
+        help="Run local VLM safety filtering on a short text snippet.",
+    )
+    vlm_safety_parser.add_argument("--text", required=True)
+    vlm_safety_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    vlm_pilot_parser = subparsers.add_parser(
+        "vlm-pilot",
+        parents=[db_parent],
+        help="Run a small local-only VLM analysis pilot with backup, checks, and smoke tests.",
+    )
+    vlm_pilot_parser.add_argument("--date", required=True)
+    vlm_pilot_parser.add_argument("--limit", type=int, default=20)
+    vlm_pilot_parser.add_argument("--engine", default=None)
+    vlm_pilot_parser.add_argument("--model", default=None)
+    vlm_pilot_parser.add_argument("--config", type=Path, default=None)
+    vlm_pilot_parser.add_argument("--prompt-template", default="lifelog_structured_tags_v1")
+    vlm_pilot_parser.add_argument("--dry-run", action="store_true")
+    vlm_pilot_parser.add_argument("--save-report", action="store_true")
+    vlm_pilot_parser.add_argument("--force", action="store_true")
+    vlm_pilot_parser.add_argument("--skip-existing", action="store_true")
+    vlm_pilot_parser.add_argument("--include-hidden", action="store_true")
+    vlm_pilot_parser.add_argument(
+        "--strategy",
+        choices=["time_spread", "event_evidence", "ocr_first", "gps_first"],
+        default="time_spread",
+    )
+    vlm_pilot_parser.add_argument("--output-dir", type=Path, default=DEFAULT_VLM_PILOT_OUTPUT_DIR)
+    vlm_pilot_parser.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
+    vlm_pilot_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    vlm_model_info_parser = subparsers.add_parser(
+        "vlm-model-info",
+        help="Show configured local VLM and multimodal embedding model settings.",
+    )
+    vlm_model_info_parser.add_argument("--config", type=Path, default=None)
+    vlm_model_info_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    benchmark_vlm_parser = subparsers.add_parser(
+        "benchmark-vlm",
+        help="Benchmark local image caption/tag extraction engines without external APIs.",
+    )
+    benchmark_vlm_parser.add_argument("--cases", type=Path, required=True)
+    benchmark_vlm_parser.add_argument("--config", type=Path, default=None)
+    benchmark_vlm_parser.add_argument("--engine", default=None)
+    benchmark_vlm_parser.add_argument("--limit", type=int, default=None)
+    benchmark_vlm_parser.add_argument("--save", action="store_true")
+    benchmark_vlm_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BENCHMARK_OUTPUT_DIR)
+    benchmark_vlm_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    benchmark_embedding_parser = subparsers.add_parser(
+        "benchmark-image-embedding",
+        help="Benchmark local text/image embedding retrieval engines.",
+    )
+    benchmark_embedding_parser.add_argument("--cases", type=Path, required=True)
+    benchmark_embedding_parser.add_argument("--config", type=Path, default=None)
+    benchmark_embedding_parser.add_argument("--engine", default=None)
+    benchmark_embedding_parser.add_argument("--limit", type=int, default=None)
+    benchmark_embedding_parser.add_argument("--save", action="store_true")
+    benchmark_embedding_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BENCHMARK_OUTPUT_DIR)
+    benchmark_embedding_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    benchmark_qwen_parser = subparsers.add_parser(
+        "benchmark-qwen-multimodal",
+        help="Run paired Qwen3-VL and Qwen3-VL-Embedding benchmark flows.",
+    )
+    benchmark_qwen_parser.add_argument("--cases", type=Path, required=True)
+    benchmark_qwen_parser.add_argument("--config", type=Path, default=None)
+    benchmark_qwen_parser.add_argument("--engine", default=None, help="Use one engine override for both VLM and embedding, e.g. fake.")
+    benchmark_qwen_parser.add_argument("--vlm-engine", default=None)
+    benchmark_qwen_parser.add_argument("--embedding-engine", default=None)
+    benchmark_qwen_parser.add_argument("--limit", type=int, default=None)
+    benchmark_qwen_parser.add_argument("--save", action="store_true")
+    benchmark_qwen_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BENCHMARK_OUTPUT_DIR)
+    benchmark_qwen_parser.add_argument("--json", action="store_true", dest="as_json")
 
     ocr_images_parser = subparsers.add_parser(
         "ocr-images",
@@ -403,6 +885,31 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_safe_parser.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
     rebuild_safe_parser.add_argument("--snapshot-query", action="append", default=None)
     rebuild_safe_parser.add_argument("--snapshot-dir", type=Path, default=DEFAULT_SEARCH_SNAPSHOT_DIR)
+
+    rebuild_analysis_parser = subparsers.add_parser(
+        "rebuild-events-with-analysis",
+        parents=[db_parent],
+        help="Rebuild events after OCR/VLM analysis and save before/after quality diffs.",
+    )
+    rebuild_analysis_parser.add_argument("--date", default=None)
+    rebuild_analysis_parser.add_argument("--from", dest="from_date", default=None)
+    rebuild_analysis_parser.add_argument("--to", dest="to_date", default=None)
+    rebuild_analysis_parser.add_argument("--dry-run", action="store_true")
+    rebuild_analysis_parser.add_argument("--save-report", action="store_true")
+    rebuild_analysis_parser.add_argument("--force", action="store_true")
+    rebuild_analysis_parser.add_argument("--eval-path", type=Path, default=None)
+    rebuild_analysis_parser.add_argument("--output-dir", type=Path, default=DEFAULT_EVENT_REBUILD_OUTPUT_DIR)
+    rebuild_analysis_parser.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
+    rebuild_analysis_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    event_diff_parser = subparsers.add_parser(
+        "event-diff",
+        help="Compare two event rebuild snapshots or reports.",
+    )
+    event_diff_parser.add_argument("--date", default=None)
+    event_diff_parser.add_argument("--before", type=Path, required=True)
+    event_diff_parser.add_argument("--after", type=Path, required=True)
+    event_diff_parser.add_argument("--json", action="store_true", dest="as_json")
 
     event_stats_parser = subparsers.add_parser(
         "event-stats",
@@ -527,6 +1034,15 @@ def build_parser() -> argparse.ArgumentParser:
     private_eval_parser.add_argument("--init-template", action="store_true")
     private_eval_parser.add_argument("--strict", action="store_true")
 
+    make_private_eval_template_parser = subparsers.add_parser(
+        "make-private-eval-template",
+        parents=[db_parent],
+        help="Generate a local private eval YAML template from aggregate DB state for one baseline date.",
+    )
+    make_private_eval_template_parser.add_argument("--date", required=True)
+    make_private_eval_template_parser.add_argument("--output", type=Path, required=True)
+    make_private_eval_template_parser.add_argument("--json", action="store_true", dest="as_json")
+
     eval_compare_parser = subparsers.add_parser(
         "eval-compare",
         parents=[db_parent],
@@ -598,6 +1114,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_analysis_target_args(parser: argparse.ArgumentParser, *, required_type: bool = True) -> None:
+    parser.add_argument(
+        "--type",
+        choices=["ocr", "vlm", "image_embedding", "text_embedding", "event_rebuild"],
+        required=required_type,
+        dest="job_type",
+    )
+    parser.add_argument("--date", default=None)
+    parser.add_argument("--from", dest="from_date", default=None)
+    parser.add_argument("--to", dest="to_date", default=None)
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--limit", type=int, default=None)
+
+
+def _add_analysis_filter_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--engine", default=None)
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--model-path", default=None)
+    parser.add_argument("--prompt-version", default=None)
+    parser.add_argument("--analysis-version", default=None)
+    parser.add_argument("--embedding-type", choices=["caption", "ocr", "combined_text"], default="combined_text")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--failed-only", action="store_true")
+    parser.add_argument("--engine-unavailable-only", action="store_true")
+    parser.add_argument("--version-changed-only", action="store_true")
+
+
 def run_init_db(db_path: Path | None) -> int:
     resolved_path = resolve_db_path(db_path)
     repository = LifelogRepository(resolved_path)
@@ -634,6 +1178,304 @@ def run_backup_db(
     print(f"- backup: {result.backup_path}")
     print(f"- size_bytes: {result.size_bytes}")
     return 0
+
+
+def run_model_diagnostics_cli(*, config_path: Path | None, as_json: bool) -> int:
+    report = run_model_diagnostics(config_path)
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_model_diagnostics(report))
+    return 0
+
+
+def run_cleanup_fake_analysis_cli(
+    db_path: Path | None,
+    *,
+    dry_run: bool,
+    yes: bool,
+    include_engine_unavailable: bool,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    as_json: bool,
+) -> int:
+    report = cleanup_fake_analysis(
+        resolve_db_path(db_path),
+        dry_run=dry_run or not yes,
+        yes=yes,
+        include_engine_unavailable=include_engine_unavailable,
+        date=date_value,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_cleanup_fake_analysis(report))
+    return 0 if not report.get("error") else 1
+
+
+def run_cleanup_vlm_status_cli(
+    db_path: Path | None,
+    *,
+    statuses: list[str] | None,
+    engine: str | None,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    dry_run: bool,
+    yes: bool,
+    as_json: bool,
+) -> int:
+    report = cleanup_vlm_status(
+        resolve_db_path(db_path),
+        statuses=statuses,
+        engine=engine,
+        date=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        dry_run=dry_run or not yes,
+        yes=yes,
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_cleanup_vlm_status(report))
+    return 0 if not report.get("error") else 1
+
+
+def run_analysis_plan_cli(
+    db_path: Path | None,
+    *,
+    args,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    options = _analysis_plan_options_from_args(args, command_name="analysis-plan")
+    plan = plan_analysis(repository, options).to_dict()
+    print(dumps_json(plan) if args.as_json else format_analysis_plan(plan))
+    return 0
+
+
+def run_analysis_run_cli(
+    db_path: Path | None,
+    *,
+    args,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    options = _analysis_run_options_from_args(args, command_name="analysis-run")
+    if _is_fake_name(options.engine_name, options.model_name, options.model_path) and not args.allow_fake_write and not options.dry_run:
+        print(
+            "analysis-run: fake engine/model is test-only; forcing dry-run. "
+            "Use --allow-fake-write only for isolated test databases.",
+            file=sys.stderr,
+        )
+        scope = options.to_scope()
+        scope["dry_run"] = True
+        options = AnalysisRunOptions(**scope)
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    report = run_analysis_job(repository, options, output_dir=args.output_dir, progress_callback=progress)
+    print(dumps_json(report) if args.as_json else format_analysis_run_report(report))
+    return 0
+
+
+def run_analysis_status_cli(
+    db_path: Path | None,
+    *,
+    job_id: str | None,
+    recent: int,
+    as_json: bool,
+) -> int:
+    repository = AnalysisJobRepository(resolve_db_path(db_path))
+    repository.initialize()
+    if job_id:
+        job = repository.get_job(job_id)
+        if not job:
+            print(f"analysis job not found: {job_id}", file=sys.stderr)
+            return 1
+        payload = {"job": job, "items": repository.list_items(job_id, limit=100)}
+    else:
+        payload = {"jobs": repository.list_jobs(recent=recent)}
+    print(dumps_json(payload) if as_json else format_analysis_status(payload))
+    return 0
+
+
+def run_analysis_resume_cli(
+    db_path: Path | None,
+    *,
+    args,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    try:
+        report = resume_analysis_job(
+            repository,
+            args.job_id,
+            failed_only=args.failed_only,
+            engine_unavailable_only=args.engine_unavailable_only,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            save_report=args.save_report,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(dumps_json(report) if args.as_json else format_analysis_run_report(report))
+    return 0
+
+
+def run_analysis_retry_failed_cli(
+    db_path: Path | None,
+    *,
+    args,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    if args.job_id:
+        try:
+            report = resume_analysis_job(
+                repository,
+                args.job_id,
+                failed_only=True,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                save_report=args.save_report,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    else:
+        if not args.job_type:
+            print("analysis-retry-failed requires --job-id or --type", file=sys.stderr)
+            return 1
+        options = _analysis_run_options_from_args(args, command_name="analysis-retry-failed")
+        report = retry_failed_analysis(repository, options)
+    print(dumps_json(report) if args.as_json else format_analysis_run_report(report))
+    return 0
+
+
+def run_analysis_cleanup_cli(
+    db_path: Path | None,
+    *,
+    failed: bool,
+    engine_unavailable: bool,
+    old_runs: int | None,
+    dry_run: bool,
+    yes: bool,
+    as_json: bool,
+) -> int:
+    repository = AnalysisJobRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = repository.cleanup(
+        failed=failed,
+        engine_unavailable=engine_unavailable,
+        old_runs_days=old_runs,
+        dry_run=True if not yes else dry_run,
+        yes=yes,
+    )
+    print(dumps_json(report) if as_json else format_analysis_cleanup(report))
+    return 0
+
+
+def run_storage_stats_cli(db_path: Path | None, *, as_json: bool) -> int:
+    report = storage_stats(resolve_db_path(db_path))
+    print(dumps_json(report) if as_json else format_storage_stats(report))
+    return 0
+
+
+def run_db_maintenance_cli(
+    db_path: Path | None,
+    *,
+    backup: bool,
+    vacuum: bool,
+    yes: bool,
+    backup_dir: Path,
+    as_json: bool,
+) -> int:
+    report = run_db_maintenance(
+        resolve_db_path(db_path),
+        backup=backup,
+        vacuum=vacuum,
+        yes=yes,
+        backup_dir=backup_dir,
+    )
+    print(dumps_json(report) if as_json else format_db_maintenance(report))
+    return 0
+
+
+def run_generate_report_cli(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    public_mode: bool,
+    private_mode: bool,
+    eval_path: Path | None,
+    eval_run: Path | None,
+    output: Path | None,
+    include_examples: bool,
+    no_examples: bool,
+    save_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    mode = "private" if private_mode else "public"
+    examples = bool(include_examples) and not no_examples
+    report = build_report(
+        repository,
+        ReportOptions(
+            start_date=from_date,
+            end_date=to_date,
+            mode=mode,  # type: ignore[arg-type]
+            eval_path=eval_path,
+            eval_run=eval_run,
+            include_examples=examples,
+            save_json=save_json,
+        ),
+    )
+    result = write_report(report, output_path=output, save_json=save_json, reports_dir=DEFAULT_REPORTS_DIR)
+    print("Generated report:")
+    print(f"- markdown: {result.markdown_path}")
+    if result.json_path:
+        print(f"- json: {result.json_path}")
+    print(f"- mode: {mode}")
+    print(f"- examples: {examples}")
+    return 0
+
+
+def _analysis_plan_options_from_args(args, *, command_name: str) -> AnalysisPlanOptions:
+    start_date, end_date = _resolve_range_selection(
+        date_value=args.date,
+        from_date=args.from_date,
+        to_date=args.to_date,
+        all_dates=args.all,
+        command_name=command_name,
+        allow_all_without_dates=True,
+    )
+    return AnalysisPlanOptions(
+        job_type=args.job_type,
+        start_date=start_date,
+        end_date=end_date,
+        all_dates=args.all,
+        limit=args.limit,
+        engine_name=args.engine,
+        model_name=args.model,
+        model_path=args.model_path,
+        prompt_version=args.prompt_version,
+        analysis_version=args.analysis_version,
+        embedding_type=args.embedding_type,
+        force=args.force,
+        skip_existing=args.skip_existing,
+        failed_only=args.failed_only,
+        engine_unavailable_only=args.engine_unavailable_only,
+        version_changed_only=args.version_changed_only,
+    )
+
+
+def _analysis_run_options_from_args(args, *, command_name: str) -> AnalysisRunOptions:
+    plan = _analysis_plan_options_from_args(args, command_name=command_name)
+    return AnalysisRunOptions(
+        **plan.to_scope(),
+        dry_run=getattr(args, "dry_run", False),
+        job_id=getattr(args, "job_id", None),
+        save_report=getattr(args, "save_report", False),
+    )
 
 
 def run_ingest_line(db_path: Path | None, path: Path, chat_name: str | None) -> int:
@@ -698,7 +1540,18 @@ def run_qa(
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
-    result = route_query(repository, query, limit=limit, include_hidden=include_hidden)
+    default_model_config = Path("private_config/model_runtime.yaml")
+    multimodal_config = {}
+    if default_model_config.exists():
+        config = load_model_runtime_config(default_model_config).multimodal_embedding
+        multimodal_config = config.to_dict()
+    result = route_query(
+        repository,
+        query,
+        limit=limit,
+        include_hidden=include_hidden,
+        multimodal_config=multimodal_config,
+    )
     if as_json:
         print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
     else:
@@ -742,6 +1595,7 @@ def run_search(
     db_path: Path | None,
     query: str,
     *,
+    backend: str | None,
     limit: int,
     date_from: str | None,
     date_to: str | None,
@@ -752,6 +1606,23 @@ def run_search(
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
+    if backend in {"embedding", "hybrid"}:
+        report = multimodal_search(
+            repository,
+            MultimodalSearchOptions(
+                query=query,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+                backend=backend,  # type: ignore[arg-type]
+                include_hidden=include_hidden,
+            ),
+        )
+        if as_json:
+            print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_multimodal_search(report))
+        return 0
     report = local_text_search(
         repository,
         LocalSearchOptions(
@@ -895,6 +1766,7 @@ def run_analyze_images(
     limit: int,
     engine_name: str | None = None,
     model_name: str | None = None,
+    config_path: Path | None = None,
     dry_run: bool = False,
     force: bool = False,
     skip_existing: bool = False,
@@ -903,7 +1775,21 @@ def run_analyze_images(
     ocr_backend: str | None,
     vlm_backend: str | None,
     vlm_model: str | None,
+    prompt_template: str | None = None,
+    allow_fake_write: bool = False,
 ) -> int:
+    config = load_model_runtime_config(config_path).vlm
+    resolved_engine = engine_name or config.engine
+    resolved_model_name = model_name or config.model_name
+    resolved_model_path = None if model_name else config.model_path
+    resolved_prompt_template = prompt_template or config.prompt_version
+    guarded_dry_run = _guard_fake_write(
+        command_name="analyze-images",
+        engine_name=resolved_engine,
+        model_name=resolved_model_name,
+        dry_run=dry_run,
+        allow_fake_write=allow_fake_write,
+    )
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
     use_vlm_table = any(
@@ -911,9 +1797,11 @@ def run_analyze_images(
             date_value,
             from_date,
             all_dates,
-            engine_name,
-            model_name,
-            dry_run,
+            resolved_engine,
+            resolved_model_name,
+            resolved_model_path,
+            config_path,
+            guarded_dry_run,
             force,
             skip_existing,
             only_with_ocr,
@@ -940,15 +1828,25 @@ def run_analyze_images(
                 end_date=end_date,
                 all_dates=all_dates,
                 limit=limit,
-                engine_name=engine_name,
-                model_name=model_name,
-                dry_run=dry_run,
+                engine_name=resolved_engine,
+                model_name=resolved_model_path or resolved_model_name,
+                dry_run=guarded_dry_run,
                 force=force,
                 skip_existing=skip_existing,
                 only_with_ocr=only_with_ocr,
                 only_gps=only_gps,
+                prompt_template=resolved_prompt_template,
             ),
-            engine=get_vlm_engine(engine_name, model_name=model_name),
+            engine=get_vlm_engine(
+                resolved_engine,
+                model_name=resolved_model_name,
+                model_path=resolved_model_path,
+                device=config.device,
+                dtype=config.dtype,
+                local_files_only=config.local_files_only,
+                max_image_size=config.max_image_size,
+                max_new_tokens=config.max_new_tokens,
+            ),
             progress_callback=progress,
         )
         print(format_vlm_report(report))
@@ -988,6 +1886,7 @@ def run_vlm_show_cli(
     date_value: str | None,
     limit: int,
     full: bool,
+    show_errors: bool,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
@@ -1000,8 +1899,185 @@ def run_vlm_show_cli(
             end_date=date_value,
             limit=limit,
         )
-    print(format_vlm_show(rows, full=full))
+    print(format_vlm_show(rows, full=full, show_errors=show_errors))
     return 0
+
+
+def run_env_check_cli(*, config_path: Path | None, as_json: bool) -> int:
+    report = run_env_check(config_path)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_env_check(report))
+    return 0
+
+
+def run_vlm_review_queue_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    status: str | None,
+    unreviewed: bool,
+    safety_flags: bool,
+    people_present: bool,
+    low_confidence: float | None,
+    food_cues: bool,
+    location_cues: bool,
+    has_ocr: bool,
+    has_embedding: bool,
+    hidden: bool,
+    wrong: bool,
+    limit: int,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_vlm_review_items(
+        repository,
+        VlmReviewFilters(
+            date=date_value,
+            date_from=from_date,
+            date_to=to_date,
+            review_status=status,
+            unreviewed=unreviewed,
+            safety_flags=safety_flags,
+            people_present=people_present,
+            low_confidence=low_confidence,
+            food_cues=food_cues,
+            location_cues=location_cues,
+            has_ocr=has_ocr,
+            has_embedding=has_embedding,
+            hidden=True if hidden else None,
+            wrong=True if wrong else None,
+            limit=limit,
+        ),
+    )
+    if as_json:
+        print(json.dumps({"results": rows, "total": len(rows)}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_vlm_review_queue(rows))
+    return 0
+
+
+def run_update_vlm_result_cli(
+    db_path: Path | None,
+    *,
+    media_id: str,
+    caption: str | None,
+    short_caption: str | None,
+    tags: list[str],
+    scene_tags: list[str],
+    object_tags: list[str],
+    activity_tags: list[str],
+    location_cues: list[str],
+    accepted: bool,
+    rejected: bool,
+    wrong: bool,
+    needs_fix: bool,
+    verified: bool,
+    hidden: bool,
+    not_searchable: bool,
+    not_event_usable: bool,
+    note: str | None,
+    clear_override: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    if clear_override:
+        deleted = clear_vlm_override(repository, media_id)
+        payload = {"media_id": media_id, "deleted": deleted}
+    else:
+        review_status = _vlm_review_status_from_flags(accepted=accepted, rejected=rejected, wrong=wrong, needs_fix=needs_fix)
+        payload = save_vlm_override(
+            repository,
+            VlmOverrideUpdate(
+                media_id=media_id,
+                caption_override=caption,
+                short_caption_override=short_caption,
+                scene_tags_override=scene_tags or None,
+                object_tags_override=object_tags or None,
+                activity_tags_override=activity_tags or None,
+                food_cues_override=tags or None,
+                location_cues_override=location_cues or None,
+                is_verified=True if verified else None,
+                is_hidden=True if hidden else None,
+                is_wrong=True if wrong else None,
+                is_searchable=False if not_searchable or rejected or wrong else None,
+                is_event_usable=False if not_event_usable or rejected or wrong else None,
+                review_status=review_status,
+                review_note=note,
+            ),
+        )
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(f"VLM override saved: {media_id}" if not clear_override else f"VLM override cleared: {media_id} ({payload['deleted']})")
+    return 0
+
+
+def run_bulk_update_vlm_results_cli(
+    db_path: Path | None,
+    *,
+    media_ids: list[str],
+    from_file: Path | None,
+    accepted: bool,
+    rejected: bool,
+    wrong: bool,
+    verified: bool,
+    hidden: bool,
+    not_searchable: bool,
+    not_event_usable: bool,
+    tags: list[str],
+    as_json: bool,
+) -> int:
+    ids = list(media_ids)
+    if from_file is not None and from_file.expanduser().exists():
+        ids.extend(from_file.expanduser().read_text(encoding="utf-8").splitlines())
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    review_status = _vlm_review_status_from_flags(accepted=accepted, rejected=rejected, wrong=wrong, needs_fix=False)
+    payload = bulk_update_vlm_overrides(
+        repository,
+        ids,
+        review_status=review_status,
+        is_verified=True if verified else None,
+        is_hidden=True if hidden else None,
+        is_wrong=True if wrong else None,
+        is_searchable=False if not_searchable or rejected or wrong else None,
+        is_event_usable=False if not_event_usable or rejected or wrong else None,
+        add_tags=tags or None,
+    )
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(f"VLM overrides updated: {payload['updated']}")
+    return 0
+
+
+def run_make_vlm_eval_case_cli(*, media_id: str | None, query: str | None, expected_media_id: str | None) -> int:
+    print(generate_vlm_eval_case(media_id=media_id, query=query, expected_media_id=expected_media_id))
+    return 0
+
+
+def _vlm_review_status_from_flags(
+    *,
+    accepted: bool,
+    rejected: bool,
+    wrong: bool,
+    needs_fix: bool,
+) -> str | None:
+    if wrong:
+        return "wrong"
+    if rejected:
+        return "rejected"
+    if needs_fix:
+        return "needs_fix"
+    if accepted:
+        return "accepted"
+    return None
 
 
 def run_image_search_cli(
@@ -1011,18 +2087,482 @@ def run_image_search_cli(
     from_date: str | None,
     to_date: str | None,
     limit: int,
+    backend: str,
+    include_hidden: bool,
     as_json: bool,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
+    if backend != "sql":
+        report = multimodal_search(
+            repository,
+            MultimodalSearchOptions(
+                query=query,
+                date_from=from_date,
+                date_to=to_date,
+                limit=limit,
+                backend=backend,  # type: ignore[arg-type]
+                include_hidden=include_hidden,
+            ),
+        )
+        if as_json:
+            print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_multimodal_search(report))
+        return 0
     report = image_search(
         repository,
-        ImageSearchOptions(query=query, date_from=from_date, date_to=to_date, limit=limit),
+        ImageSearchOptions(query=query, date_from=from_date, date_to=to_date, limit=limit, include_hidden=include_hidden),
     )
     if as_json:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
     else:
         print(format_image_search(report))
+    return 0
+
+
+def run_build_image_embeddings_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    engine_name: str | None,
+    model_name: str | None,
+    model_path: str | None,
+    config_path: Path | None,
+    dry_run: bool,
+    force: bool,
+    skip_existing: bool,
+    allow_fake_write: bool = False,
+) -> int:
+    start_date, end_date = _resolve_range_selection(
+        date_value=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        all_dates=False,
+        command_name="build-image-embeddings",
+        allow_all_without_dates=False,
+    )
+    config = load_model_runtime_config(config_path).multimodal_embedding
+    resolved_engine = engine_name or config.engine
+    resolved_model = model_name or config.model_name
+    resolved_path = model_path or config.model_path
+    guarded_dry_run = _guard_fake_write(
+        command_name="build-image-embeddings",
+        engine_name=resolved_engine,
+        model_name=resolved_model or resolved_path,
+        dry_run=dry_run,
+        allow_fake_write=allow_fake_write,
+    )
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    report = build_image_embeddings(
+        repository,
+        BuildMediaEmbeddingsOptions(
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            embedding_type="image",
+            engine_name=resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+            dry_run=guarded_dry_run,
+            force=force,
+            skip_existing=skip_existing,
+        ),
+        engine=get_multimodal_embedding_engine(
+            resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+        ),
+        progress_callback=progress,
+    )
+    print(format_embedding_build_report(report))
+    return 0
+
+
+def run_build_text_embeddings_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    embedding_type: str,
+    engine_name: str | None,
+    model_name: str | None,
+    model_path: str | None,
+    config_path: Path | None,
+    dry_run: bool,
+    force: bool,
+    skip_existing: bool,
+    allow_fake_write: bool = False,
+) -> int:
+    start_date, end_date = _resolve_range_selection(
+        date_value=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        all_dates=False,
+        command_name="build-text-embeddings",
+        allow_all_without_dates=False,
+    )
+    config = load_model_runtime_config(config_path).multimodal_embedding
+    resolved_engine = engine_name or config.engine
+    resolved_model = model_name or config.model_name
+    resolved_path = model_path or config.model_path
+    guarded_dry_run = _guard_fake_write(
+        command_name="build-text-embeddings",
+        engine_name=resolved_engine,
+        model_name=resolved_model or resolved_path,
+        dry_run=dry_run,
+        allow_fake_write=allow_fake_write,
+    )
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    report = build_text_embeddings(
+        repository,
+        BuildMediaEmbeddingsOptions(
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            embedding_type=embedding_type,  # type: ignore[arg-type]
+            engine_name=resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+            dry_run=guarded_dry_run,
+            force=force,
+            skip_existing=skip_existing,
+        ),
+        engine=get_multimodal_embedding_engine(
+            resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+        ),
+        progress_callback=progress,
+    )
+    print(format_embedding_build_report(report))
+    return 0
+
+
+def run_embedding_stats_cli(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = embedding_stats(repository, start_date=from_date, end_date=to_date or from_date)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_embedding_stats(report))
+    return 0
+
+
+def _is_fake_name(*values: str | None) -> bool:
+    return any("fake" in str(value or "").lower() for value in values if value is not None)
+
+
+def _guard_fake_write(
+    *,
+    command_name: str,
+    engine_name: str | None,
+    model_name: str | None,
+    dry_run: bool,
+    allow_fake_write: bool,
+) -> bool:
+    if dry_run or allow_fake_write or not _is_fake_name(engine_name, model_name):
+        return dry_run
+    print(
+        f"{command_name}: fake engine/model is test-only; forcing dry-run. "
+        "Use --allow-fake-write only for isolated test databases.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def run_multimodal_search_cli(
+    db_path: Path | None,
+    *,
+    query: str,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    backend: str,
+    engine_name: str | None,
+    model_name: str | None,
+    model_path: str | None,
+    config_path: Path | None,
+    include_hidden: bool,
+    as_json: bool,
+) -> int:
+    resolved_config_path = config_path
+    if resolved_config_path is None:
+        default_private_config = Path("private_config/model_runtime.yaml")
+        resolved_config_path = default_private_config if default_private_config.exists() else None
+    config = load_model_runtime_config(resolved_config_path).multimodal_embedding
+    resolved_engine = engine_name or config.engine
+    resolved_model = model_name or config.model_name
+    resolved_path = model_path or config.model_path
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(
+            query=query,
+            date_from=from_date,
+            date_to=to_date,
+            limit=limit,
+            backend=backend,  # type: ignore[arg-type]
+            engine_name=resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+            include_hidden=include_hidden,
+        ),
+        engine=get_multimodal_embedding_engine(
+            resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+        ),
+    )
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_multimodal_search(report))
+    return 0
+
+
+def run_vlm_prompt(*, template: str, as_json: bool) -> int:
+    try:
+        prompt_template = get_vlm_prompt_template(template)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps(prompt_template.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(prompt_template.prompt)
+    return 0
+
+
+def run_vlm_safety_check(*, text: str, as_json: bool) -> int:
+    report = safety_check_text(text)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print("Safety check:")
+        print(f"- violations: {', '.join(report['violations']) or 'none'}")
+        print(f"- sanitized: {report['sanitized']}")
+        print(f"- safety_flags: {', '.join(report['safety_flags']) or 'none'}")
+        print(f"- evidence_strength: {report['evidence_strength']}")
+    return 0
+
+
+def run_vlm_pilot_cli(
+    db_path: Path | None,
+    *,
+    date_value: str,
+    limit: int,
+    engine_name: str | None,
+    model_name: str | None,
+    config_path: Path | None,
+    prompt_template: str | None,
+    dry_run: bool,
+    save_report: bool,
+    force: bool,
+    skip_existing: bool,
+    include_hidden: bool,
+    strategy: str,
+    output_dir: Path,
+    backup_dir: Path,
+    as_json: bool,
+) -> int:
+    config = load_model_runtime_config(config_path)
+    resolved_engine_name = engine_name or config.vlm.engine
+    resolved_model_name = model_name or config.vlm.model_name
+    resolved_model_path = None if model_name else config.vlm.model_path
+    resolved_path = resolve_db_path(db_path)
+    repository = LifelogRepository(resolved_path)
+    repository.initialize()
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    report = run_vlm_pilot(
+        repository,
+        resolved_path,
+        VlmPilotOptions(
+            date=date_value,
+            limit=limit,
+            engine_name=resolved_engine_name,
+            model_name=resolved_model_path or resolved_model_name,
+            prompt_template=prompt_template or config.vlm.prompt_version,
+            dry_run=dry_run,
+            save_report=save_report,
+            force=force,
+            skip_existing=skip_existing,
+            include_hidden=include_hidden,
+            strategy=strategy,  # type: ignore[arg-type]
+            output_dir=output_dir,
+            backup_dir=backup_dir,
+        ),
+        engine=get_vlm_engine(
+            resolved_engine_name,
+            model_name=resolved_model_name,
+            model_path=resolved_model_path,
+            device=config.vlm.device,
+            dtype=config.vlm.dtype,
+            local_files_only=config.vlm.local_files_only,
+            max_image_size=config.vlm.max_image_size,
+            max_new_tokens=config.vlm.max_new_tokens,
+        ),
+        progress_callback=progress,
+    )
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_vlm_pilot_report(report))
+    return 0 if report.get("db_safety", {}).get("strict_ok") else 1
+
+
+def run_vlm_model_info(*, config_path: Path | None, as_json: bool) -> int:
+    config = load_model_runtime_config(config_path)
+    report = model_info(config)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_model_info(report))
+    return 0
+
+
+def run_benchmark_vlm_cli(
+    *,
+    cases_path: Path,
+    config_path: Path | None,
+    engine_name: str | None,
+    limit: int | None,
+    save: bool,
+    output_dir: Path,
+    as_json: bool,
+) -> int:
+    config = load_model_runtime_config(config_path)
+    cases = load_benchmark_cases(cases_path, limit=limit)
+    engine = vlm_engine_from_spec(config.vlm, override_engine=engine_name)
+    vlm_report = benchmark_vlm(cases, engine=engine)
+    report = assemble_report(cases=cases, config=config, vlm_report=vlm_report, embedding_report=None)
+    output_paths = write_benchmark_report(report, output_dir=output_dir) if save else None
+    if as_json:
+        payload = dict(report)
+        if output_paths:
+            payload["output_paths"] = output_paths
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_benchmark_summary(report, output_paths=output_paths))
+    return 0
+
+
+def run_benchmark_image_embedding_cli(
+    *,
+    cases_path: Path,
+    config_path: Path | None,
+    engine_name: str | None,
+    limit: int | None,
+    save: bool,
+    output_dir: Path,
+    as_json: bool,
+) -> int:
+    config = load_model_runtime_config(config_path)
+    cases = load_benchmark_cases(cases_path, limit=limit)
+    engine = embedding_engine_from_spec(config.multimodal_embedding, override_engine=engine_name)
+    embedding_report = benchmark_image_embedding(cases, engine=engine)
+    report = assemble_report(cases=cases, config=config, vlm_report=None, embedding_report=embedding_report)
+    output_paths = write_benchmark_report(report, output_dir=output_dir) if save else None
+    if as_json:
+        payload = dict(report)
+        if output_paths:
+            payload["output_paths"] = output_paths
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_benchmark_summary(report, output_paths=output_paths))
+    return 0
+
+
+def run_benchmark_qwen_multimodal_cli(
+    *,
+    cases_path: Path,
+    config_path: Path | None,
+    engine_name: str | None,
+    vlm_engine_name: str | None,
+    embedding_engine_name: str | None,
+    limit: int | None,
+    save: bool,
+    output_dir: Path,
+    as_json: bool,
+) -> int:
+    config = load_model_runtime_config(config_path)
+    if engine_name == "fake":
+        config = ModelRuntimeConfig(
+            vlm=config.vlm,
+            multimodal_embedding=config.multimodal_embedding,
+        )
+    cases = load_benchmark_cases(cases_path, limit=limit)
+    report = build_multimodal_benchmark_report(
+        cases,
+        config,
+        engine_override=engine_name,
+        vlm_engine_override=vlm_engine_name,
+        embedding_engine_override=embedding_engine_name,
+    )
+    output_paths = write_benchmark_report(report, output_dir=output_dir) if save else None
+    if as_json:
+        payload = dict(report)
+        if output_paths:
+            payload["output_paths"] = output_paths
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_benchmark_summary(report, output_paths=output_paths))
     return 0
 
 
@@ -1266,6 +2806,70 @@ def run_rebuild_events_safe(
     )
     snapshot_path = write_search_snapshot(snapshot, output_dir=snapshot_dir)
     print(format_search_snapshot(snapshot, output_path=snapshot_path))
+    return 0
+
+
+def run_rebuild_events_with_analysis_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    dry_run: bool,
+    save_report: bool,
+    force: bool,
+    eval_path: Path | None,
+    output_dir: Path,
+    backup_dir: Path,
+    as_json: bool,
+) -> int:
+    if bool(date_value) == bool(from_date):
+        raise ValueError("rebuild-events-with-analysis requires exactly one of --date or --from")
+    resolved_db_path = resolve_db_path(db_path)
+    repository = LifelogRepository(resolved_db_path)
+    repository.initialize()
+
+    def progress(message: str) -> None:
+        if not dry_run:
+            print(message, file=sys.stderr)
+
+    report = rebuild_events_with_analysis(
+        repository,
+        resolved_db_path,
+        EventRebuildOptions(
+            date=date_value,
+            start_date=from_date,
+            end_date=to_date,
+            dry_run=dry_run,
+            save_report=save_report,
+            force=force,
+            eval_path=eval_path,
+            output_dir=output_dir,
+            backup_dir=backup_dir,
+        ),
+        config=_event_build_config(),
+        progress_callback=progress,
+    )
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_event_rebuild_report(report))
+    return 0 if report.get("db_safety", {}).get("strict_ok") else 1
+
+
+def run_event_diff_cli(
+    *,
+    before_path: Path,
+    after_path: Path,
+    as_json: bool,
+) -> int:
+    before = load_snapshot_or_report(before_path, slot="before_snapshot")
+    after = load_snapshot_or_report(after_path, slot="after_snapshot")
+    diff = diff_event_snapshots(before, after)
+    if as_json:
+        print(json.dumps(diff, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_event_diff(diff))
     return 0
 
 
@@ -1740,6 +3344,25 @@ def run_private_eval(
     return 0
 
 
+def run_make_private_eval_template(
+    db_path: Path | None,
+    *,
+    date_value: str,
+    output_path: Path,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    summary = write_private_eval_template_for_date(repository, date=date_value, output_path=output_path)
+    if as_json:
+        payload = dict(summary.__dict__)
+        payload["path"] = str(summary.path)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_private_eval_template_summary(summary))
+    return 0
+
+
 def run_eval_compare(
     *,
     before: Path,
@@ -1765,6 +3388,83 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_stats(db_path)
     if args.command == "backup-db":
         return run_backup_db(db_path, label=args.label, output_dir=args.output_dir)
+    if args.command == "analysis-plan":
+        return run_analysis_plan_cli(db_path, args=args)
+    if args.command == "analysis-run":
+        return run_analysis_run_cli(db_path, args=args)
+    if args.command == "analysis-status":
+        return run_analysis_status_cli(
+            db_path,
+            job_id=args.job_id,
+            recent=args.recent,
+            as_json=args.as_json,
+        )
+    if args.command == "analysis-resume":
+        return run_analysis_resume_cli(db_path, args=args)
+    if args.command == "analysis-retry-failed":
+        return run_analysis_retry_failed_cli(db_path, args=args)
+    if args.command == "analysis-cleanup":
+        return run_analysis_cleanup_cli(
+            db_path,
+            failed=args.failed,
+            engine_unavailable=args.engine_unavailable,
+            old_runs=args.old_runs,
+            dry_run=args.dry_run,
+            yes=args.yes,
+            as_json=args.as_json,
+        )
+    if args.command == "storage-stats":
+        return run_storage_stats_cli(db_path, as_json=args.as_json)
+    if args.command == "db-maintenance":
+        return run_db_maintenance_cli(
+            db_path,
+            backup=args.backup,
+            vacuum=args.vacuum,
+            yes=args.yes,
+            backup_dir=args.backup_dir,
+            as_json=args.as_json,
+        )
+    if args.command == "model-diagnostics":
+        return run_model_diagnostics_cli(config_path=args.config, as_json=args.as_json)
+    if args.command == "cleanup-fake-analysis":
+        return run_cleanup_fake_analysis_cli(
+            db_path,
+            dry_run=args.dry_run,
+            yes=args.yes,
+            include_engine_unavailable=args.include_engine_unavailable,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            as_json=args.as_json,
+        )
+    if args.command == "cleanup-vlm-status":
+        return run_cleanup_vlm_status_cli(
+            db_path,
+            statuses=args.statuses,
+            engine=args.engine,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            dry_run=args.dry_run,
+            yes=args.yes,
+            as_json=args.as_json,
+        )
+    if args.command == "env-check":
+        return run_env_check_cli(config_path=args.config, as_json=args.as_json)
+    if args.command == "generate-report":
+        return run_generate_report_cli(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            public_mode=args.public_mode,
+            private_mode=args.private_mode,
+            eval_path=args.eval_path,
+            eval_run=args.eval_run,
+            output=args.output,
+            include_examples=args.include_examples,
+            no_examples=args.no_examples,
+            save_json=args.save_json,
+        )
     if args.command == "ingest-line":
         path = args.path or args.legacy_path
         if path is None:
@@ -1795,6 +3495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_search(
             db_path,
             args.query,
+            backend=args.backend,
             limit=args.limit,
             date_from=args.date_from,
             date_to=args.date_to,
@@ -1857,6 +3558,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limit=args.limit,
                 engine_name=args.engine,
                 model_name=args.model or args.vlm_model,
+                config_path=args.config,
                 dry_run=args.dry_run,
                 force=args.force,
                 skip_existing=args.skip_existing,
@@ -1865,6 +3567,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ocr_backend=args.ocr_backend,
                 vlm_backend=args.vlm_backend,
                 vlm_model=args.vlm_model,
+                prompt_template=args.prompt_template,
+                allow_fake_write=args.allow_fake_write,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -1882,6 +3586,71 @@ def main(argv: Sequence[str] | None = None) -> int:
             date_value=args.date,
             limit=args.limit,
             full=args.full,
+            show_errors=args.show_errors,
+        )
+    if args.command == "vlm-review-queue":
+        return run_vlm_review_queue_cli(
+            db_path,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            status=args.status,
+            unreviewed=args.unreviewed,
+            safety_flags=args.safety_flags,
+            people_present=args.people_present,
+            low_confidence=args.low_confidence,
+            food_cues=args.food_cues,
+            location_cues=args.location_cues,
+            has_ocr=args.has_ocr,
+            has_embedding=args.has_embedding,
+            hidden=args.hidden,
+            wrong=args.wrong,
+            limit=args.limit,
+            as_json=args.as_json,
+        )
+    if args.command == "update-vlm-result":
+        return run_update_vlm_result_cli(
+            db_path,
+            media_id=args.media_id,
+            caption=args.caption,
+            short_caption=args.short_caption,
+            tags=args.tag,
+            scene_tags=args.scene_tag,
+            object_tags=args.object_tag,
+            activity_tags=args.activity_tag,
+            location_cues=args.location_cue,
+            accepted=args.accepted,
+            rejected=args.rejected,
+            wrong=args.wrong,
+            needs_fix=args.needs_fix,
+            verified=args.verified,
+            hidden=args.hidden,
+            not_searchable=args.not_searchable,
+            not_event_usable=args.not_event_usable,
+            note=args.note,
+            clear_override=args.clear_override,
+            as_json=args.as_json,
+        )
+    if args.command == "bulk-update-vlm-results":
+        return run_bulk_update_vlm_results_cli(
+            db_path,
+            media_ids=args.media_id,
+            from_file=args.from_file,
+            accepted=args.accepted,
+            rejected=args.rejected,
+            wrong=args.wrong,
+            verified=args.verified,
+            hidden=args.hidden,
+            not_searchable=args.not_searchable,
+            not_event_usable=args.not_event_usable,
+            tags=args.tag,
+            as_json=args.as_json,
+        )
+    if args.command == "make-vlm-eval-case":
+        return run_make_vlm_eval_case_cli(
+            media_id=args.media_id,
+            query=args.query,
+            expected_media_id=args.expected_media_id,
         )
     if args.command == "image-search":
         return run_image_search_cli(
@@ -1890,6 +3659,123 @@ def main(argv: Sequence[str] | None = None) -> int:
             from_date=args.from_date,
             to_date=args.to_date,
             limit=args.limit,
+            backend=args.backend,
+            include_hidden=args.include_hidden,
+            as_json=args.as_json,
+        )
+    if args.command == "build-image-embeddings":
+        return run_build_image_embeddings_cli(
+            db_path,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            engine_name=args.engine,
+            model_name=args.model,
+            model_path=args.model_path,
+            config_path=args.config,
+            dry_run=args.dry_run,
+            force=args.force,
+            skip_existing=args.skip_existing,
+            allow_fake_write=args.allow_fake_write,
+        )
+    if args.command == "build-text-embeddings":
+        return run_build_text_embeddings_cli(
+            db_path,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            embedding_type=args.type,
+            engine_name=args.engine,
+            model_name=args.model,
+            model_path=args.model_path,
+            config_path=args.config,
+            dry_run=args.dry_run,
+            force=args.force,
+            skip_existing=args.skip_existing,
+            allow_fake_write=args.allow_fake_write,
+        )
+    if args.command == "embedding-stats":
+        return run_embedding_stats_cli(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            as_json=args.as_json,
+        )
+    if args.command == "multimodal-search":
+        return run_multimodal_search_cli(
+            db_path,
+            query=args.query,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            backend=args.backend,
+            engine_name=args.engine,
+            model_name=args.model,
+            model_path=args.model_path,
+            config_path=args.config,
+            include_hidden=args.include_hidden,
+            as_json=args.as_json,
+        )
+    if args.command == "vlm-prompt":
+        return run_vlm_prompt(template=args.template, as_json=args.as_json)
+    if args.command == "vlm-safety-check":
+        return run_vlm_safety_check(text=args.text, as_json=args.as_json)
+    if args.command == "vlm-pilot":
+        return run_vlm_pilot_cli(
+            db_path,
+            date_value=args.date,
+            limit=args.limit,
+            engine_name=args.engine,
+            model_name=args.model,
+            config_path=args.config,
+            prompt_template=args.prompt_template,
+            dry_run=args.dry_run,
+            save_report=args.save_report,
+            force=args.force,
+            skip_existing=args.skip_existing,
+            include_hidden=args.include_hidden,
+            strategy=args.strategy,
+            output_dir=args.output_dir,
+            backup_dir=args.backup_dir,
+            as_json=args.as_json,
+        )
+    if args.command == "vlm-model-info":
+        return run_vlm_model_info(
+            config_path=args.config,
+            as_json=args.as_json,
+        )
+    if args.command == "benchmark-vlm":
+        return run_benchmark_vlm_cli(
+            cases_path=args.cases,
+            config_path=args.config,
+            engine_name=args.engine,
+            limit=args.limit,
+            save=args.save,
+            output_dir=args.output_dir,
+            as_json=args.as_json,
+        )
+    if args.command == "benchmark-image-embedding":
+        return run_benchmark_image_embedding_cli(
+            cases_path=args.cases,
+            config_path=args.config,
+            engine_name=args.engine,
+            limit=args.limit,
+            save=args.save,
+            output_dir=args.output_dir,
+            as_json=args.as_json,
+        )
+    if args.command == "benchmark-qwen-multimodal":
+        return run_benchmark_qwen_multimodal_cli(
+            cases_path=args.cases,
+            config_path=args.config,
+            engine_name=args.engine,
+            vlm_engine_name=args.vlm_engine,
+            embedding_engine_name=args.embedding_engine,
+            limit=args.limit,
+            save=args.save,
+            output_dir=args.output_dir,
             as_json=args.as_json,
         )
     if args.command == "ocr-images":
@@ -1962,6 +3848,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (ValueError, FileNotFoundError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
+    if args.command == "rebuild-events-with-analysis":
+        try:
+            return run_rebuild_events_with_analysis_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                dry_run=args.dry_run,
+                save_report=args.save_report,
+                force=args.force,
+                eval_path=args.eval_path,
+                output_dir=args.output_dir,
+                backup_dir=args.backup_dir,
+                as_json=args.as_json,
+            )
+        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.command == "event-diff":
+        return run_event_diff_cli(
+            before_path=args.before,
+            after_path=args.after,
+            as_json=args.as_json,
+        )
     if args.command == "event-stats":
         return run_event_stats(
             db_path,
@@ -2126,6 +4036,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             save_run=args.save_run,
             init_template=args.init_template,
             strict=args.strict,
+        )
+    if args.command == "make-private-eval-template":
+        return run_make_private_eval_template(
+            db_path,
+            date_value=args.date,
+            output_path=args.output,
+            as_json=args.as_json,
         )
     if args.command == "eval-compare":
         return run_eval_compare(

@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import hashlib
+import json
 import math
 import os
 import re
@@ -13,6 +14,7 @@ from typing import Any, Iterable
 from collections.abc import Callable
 
 from personal_lifelog_rag.line.call_parser import parse_line_call_text
+from personal_lifelog_rag.vlm.review_service import apply_vlm_override_to_result, should_use_vlm_for_events
 
 
 GENERATION_METHOD = "rule_based_daily_v2"
@@ -239,6 +241,7 @@ def build_event_drafts_for_date(
         end_date=target_date,
         limit=100_000,
     )
+    media_items = _apply_vlm_review_for_events(repository, media_items, target_date)
     photo_items = _photo_items(media_items)
     line_items = _line_items(line_messages)
     photo_clusters = _cluster_photos(photo_items, resolved_config)
@@ -249,6 +252,37 @@ def build_event_drafts_for_date(
         for index, cluster in enumerate(event_clusters)
         if cluster.items
     ]
+
+
+def _apply_vlm_review_for_events(repository, media_items: list[dict[str, Any]], target_date: str) -> list[dict[str, Any]]:
+    vlm_rows = repository.list_media_vlm(start_date=target_date, end_date=target_date, limit=100_000)
+    vlm_by_media = {str(row.get("media_id")): apply_vlm_override_to_result(row) for row in vlm_rows}
+    output: list[dict[str, Any]] = []
+    for media in media_items:
+        row = dict(media)
+        vlm = vlm_by_media.get(str(row.get("id")))
+        if vlm:
+            if should_use_vlm_for_events(vlm):
+                row["caption"] = vlm.get("short_caption") or vlm.get("caption") or row.get("caption")
+                row["analysis_json"] = _json_or_none(
+                    {
+                        "short_caption": vlm.get("short_caption"),
+                        "caption": vlm.get("caption"),
+                        "scene_tags": _list_from_any_json(vlm.get("scene_tags_json")),
+                        "object_tags": _list_from_any_json(vlm.get("object_tags_json")),
+                        "activity_tags": _list_from_any_json(vlm.get("activity_tags_json")),
+                        "location_cues": _list_from_any_json(vlm.get("location_cues_json")),
+                        "food_cues": _list_from_any_json(vlm.get("food_cues_json")),
+                        "safety_flags": _list_from_any_json(vlm.get("safety_flags_json")),
+                        "review_status": vlm.get("review_status"),
+                        "is_verified": bool(vlm.get("is_verified")),
+                    }
+                )
+            else:
+                row["caption"] = None
+                row["analysis_json"] = None
+        output.append(row)
+    return output
 
 
 def build_daily_event_drafts(
@@ -530,7 +564,7 @@ def _draft_from_cluster(target_date: str, cluster: _EventCluster, index: int) ->
         participants=participants,
         confidence=confidence,
         event_id=_event_id(target_date, items, index),
-        evidence=[_evidence_payload(item) for item in items],
+        evidence=[payload for item in items for payload in _evidence_payloads(item)],
     )
 
 
@@ -593,6 +627,13 @@ def _event_summary(
         parts.append("特殊メッセージ: " + "、".join(f"{key}={type_counts[key]}" for key in special_types) + "。")
     if any((item.record.get("caption") or item.record.get("ocr_text") or item.record.get("analysis_json")) for item in photo_items):
         parts.append("写真のcaption/OCR/VLMテキストも弱い根拠に含めています。")
+    ocr_values = _photo_ocr_cues(photo_items)
+    vlm_values = _photo_vlm_cues(photo_items)
+    if ocr_values:
+        parts.append("OCR候補: " + "、".join(ocr_values[:3]) + "。")
+    if vlm_values:
+        parts.append("画像解析による推定: " + "、".join(vlm_values[:3]) + "。")
+        parts.append("VLMのみの推定は弱い補助根拠として扱います。")
     return " ".join(parts)
 
 
@@ -608,6 +649,8 @@ def _confidence(
     text_rich_photo_count = sum(
         1 for item in photo_items if item.record.get("caption") or item.record.get("ocr_text") or item.record.get("analysis_json")
     )
+    ocr_count = sum(1 for item in photo_items if _has_ocr_text(item))
+    vlm_count = sum(1 for item in photo_items if _has_vlm_text(item))
 
     score = 0.35
     if evidence_count >= 2:
@@ -626,15 +669,38 @@ def _confidence(
         score += 0.06
     if text_rich_photo_count:
         score += 0.04
+    if ocr_count and vlm_count and line_items:
+        score += 0.04
+    if vlm_count and not ocr_count and not line_items:
+        score = min(score, 0.74)
     return round(min(score, 0.95), 2)
 
 
-def _evidence_payload(item: _EvidenceItem) -> dict[str, Any]:
-    return {
-        "evidence_type": item.kind,
-        "evidence_id": item.record_id,
-        "weight": _evidence_weight(item),
-    }
+def _evidence_payloads(item: _EvidenceItem) -> list[dict[str, Any]]:
+    rows = [
+        {
+            "evidence_type": item.kind,
+            "evidence_id": item.record_id,
+            "weight": _evidence_weight(item),
+        }
+    ]
+    if item.kind == "photo" and _has_ocr_text(item):
+        rows.append(
+            {
+                "evidence_type": "ocr",
+                "evidence_id": item.record_id,
+                "weight": 0.72,
+            }
+        )
+    if item.kind == "photo" and _has_vlm_text(item):
+        rows.append(
+            {
+                "evidence_type": "vlm",
+                "evidence_id": item.record_id,
+                "weight": 0.45,
+            }
+        )
+    return rows
 
 
 def _evidence_weight(item: _EvidenceItem) -> float:
@@ -648,6 +714,106 @@ def _evidence_weight(item: _EvidenceItem) -> float:
     if item.message_type in SPECIAL_MESSAGE_TYPES:
         weight += 0.03
     return round(min(weight, 1.0), 2)
+
+
+def _has_ocr_text(item: _EvidenceItem) -> bool:
+    return bool(str(item.record.get("ocr_text") or "").strip())
+
+
+def _has_vlm_text(item: _EvidenceItem) -> bool:
+    if str(item.record.get("caption") or "").strip():
+        return True
+    analysis = _analysis_dict(item.record.get("analysis_json"))
+    return any(
+        analysis.get(key)
+        for key in (
+            "short_caption",
+            "scene_tags",
+            "object_tags",
+            "activity_tags",
+            "location_cues",
+            "food_cues",
+            "text_cues",
+        )
+    )
+
+
+def _photo_ocr_cues(photo_items: list[_EvidenceItem]) -> list[str]:
+    values: list[str] = []
+    for item in photo_items:
+        text = str(item.record.get("ocr_text") or "").strip()
+        for value in sorted(_extract_locations(text) | _extract_activities(text)):
+            if value not in values:
+                values.append(value)
+    return values
+
+
+def _photo_vlm_cues(photo_items: list[_EvidenceItem]) -> list[str]:
+    values: list[str] = []
+    for item in photo_items:
+        analysis = _analysis_dict(item.record.get("analysis_json"))
+        raw_values: list[Any] = []
+        raw_values.extend(_list_from_any(analysis.get("food_cues")))
+        raw_values.extend(_list_from_any(analysis.get("location_cues")))
+        raw_values.extend(_list_from_any(analysis.get("activity_tags")))
+        raw_values.extend(_list_from_any(analysis.get("scene_tags")))
+        for raw in raw_values:
+            value = _humanize_vlm_cue(str(raw))
+            if value and value not in values:
+                values.append(value)
+    return values
+
+
+def _analysis_dict(raw: Any) -> dict[str, Any]:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_or_none(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _list_from_any_json(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return [part.strip() for part in str(value).split(",") if part.strip()]
+    return parsed if isinstance(parsed, list) else []
+
+
+def _list_from_any(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _humanize_vlm_cue(value: str) -> str:
+    mapping = {
+        "ramen_possible": "ラーメンの可能性",
+        "meal_possible": "料理・食事の可能性",
+        "cafe_possible": "カフェの可能性",
+        "restaurant": "飲食店のような場所の可能性",
+        "indoor": "屋内の可能性",
+        "outdoor": "屋外の可能性",
+        "station_possible": "駅周辺の可能性",
+        "shop_possible": "店内または店舗周辺の可能性",
+    }
+    return mapping.get(value, value if value.endswith("可能性") else value.replace("_", " "))
 
 
 def _extract_locations(text: str) -> set[str]:

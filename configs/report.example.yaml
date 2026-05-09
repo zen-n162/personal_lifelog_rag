@@ -1,0 +1,15 @@
+# Dummy public report configuration.
+# Real report outputs should be written under ignored reports/.
+
+mode: public
+include_examples: false
+sections:
+  - overview
+  - architecture
+  - privacy
+  - dataset_summary
+  - event_generation
+  - search_qa
+  - multimodal_evaluation
+  - limitations
+  - roadmap

@@ -53,9 +53,8 @@ def _seed_vlm_eval_record(repository: LifelogRepository) -> None:
         caption="ラーメンの可能性がある料理写真",
         short_caption="ラーメン写真の可能性",
         food_cues=["ramen_possible"],
-        vlm_engine="fake",
+        vlm_engine="unit_test_vlm",
         status="success",
         confidence=0.8,
         safety_flags=["low_confidence"],
     )
-

@@ -60,12 +60,30 @@ def _event_answer_sections(result: TimelineSearchResult) -> list[str]:
             lines.append(summary)
         location = redact_text(event.get("location_name"), max_chars=40)
         evidence_count = int(event.get("event_evidence_count") or 0)
+        ocr_count = int(event.get("ocr_evidence_count") or 0)
+        vlm_count = int(event.get("vlm_evidence_count") or 0)
         detail_parts: list[str] = []
         if location:
             detail_parts.append(f"場所候補: {location}")
         detail_parts.append(f"根拠: {evidence_count}件")
+        if ocr_count or vlm_count:
+            detail_parts.append(f"OCR補助: {ocr_count}件")
+            detail_parts.append(f"画像解析補助: {vlm_count}件")
         lines.append(" / ".join(detail_parts))
         lines.append("")
+
+    ocr_total = sum(int(event.get("ocr_evidence_count") or 0) for event in events)
+    vlm_total = sum(int(event.get("vlm_evidence_count") or 0) for event in events)
+    if ocr_total or vlm_total:
+        lines.extend(
+            [
+                "画像解析・OCRによる補助情報:",
+                f"- OCR由来の補助根拠: {ocr_total}件",
+                f"- VLM由来の補助根拠: {vlm_total}件",
+                "- 画像解析による推定のため、必要に応じて写真を確認してください。",
+                "",
+            ]
+        )
 
     lines.extend(
         [
@@ -168,6 +186,8 @@ def _evidence_section(result: TimelineSearchResult) -> list[str]:
         "根拠:",
         f"- イベント候補: {len(result.events)}件",
         f"- event_evidence: {_event_evidence_count(result.events)}件",
+        f"- OCR補助根拠: {_event_aux_count(result.events, 'ocr_evidence_count')}件",
+        f"- VLM補助根拠: {_event_aux_count(result.events, 'vlm_evidence_count')}件",
         f"- LINEメッセージ: {len(result.line_messages)}件",
         f"- 写真: {len(result.media_items)}枚",
         f"- GPS付き写真: {_gps_photo_count(result.media_items)}枚",
@@ -242,6 +262,10 @@ def _sorted_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _event_evidence_count(events: list[dict[str, Any]]) -> int:
     return sum(int(event.get("event_evidence_count") or 0) for event in events)
+
+
+def _event_aux_count(events: list[dict[str, Any]], key: str) -> int:
+    return sum(int(event.get(key) or 0) for event in events)
 
 
 def _gps_photo_count(media_items: list[dict[str, Any]]) -> int:

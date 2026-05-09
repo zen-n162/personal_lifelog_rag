@@ -21,6 +21,36 @@ def test_image_search_returns_vlm_and_ocr_evidence(tmp_path: Path) -> None:
     assert "ラーメン" in output
 
 
+def test_image_search_uses_visual_query_expansion_for_vlm_food_cues(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    repository.add_media_item(
+        id="media_image_search_food_cues",
+        file_path="/local/photos/food.jpg",
+        file_name="food.jpg",
+        file_hash="hash-image-search-food",
+        media_type="image",
+        captured_at="2024-12-24T15:53:00+09:00",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_image_search_food_cues",
+        caption="Food candidates on a table",
+        short_caption="Meal-like photo",
+        food_cues=["meal_possible", "rice_possible"],
+        vlm_engine="qwen3_vl_transformers",
+        model_name="local-qwen",
+        status="success",
+        confidence=0.55,
+    )
+
+    report = image_search(repository, ImageSearchOptions(query="ご飯", limit=5))
+
+    assert report["total"] == 1
+    assert report["results"][0]["media_id"] == "media_image_search_food_cues"
+    assert "meal_possible" in report["results"][0]["matched_terms"]
+    assert report["results"][0]["evidence_strength"] == "weak"
+
+
 def _seed_image_search_records(repository: LifelogRepository) -> None:
     repository.add_media_item(
         id="media_image_search",
@@ -43,8 +73,8 @@ def _seed_image_search_records(repository: LifelogRepository) -> None:
         caption="ラーメンの可能性がある料理写真",
         short_caption="ラーメン写真の可能性",
         food_cues=["ramen_possible"],
-        vlm_engine="fake",
+        vlm_engine="unit_test_vlm",
+        model_name="unit-test-vlm",
         status="success",
         confidence=0.8,
     )
-

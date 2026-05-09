@@ -105,6 +105,8 @@ def list_events_report(
         evidence = repository.list_event_evidence(str(event["id"]))
         line_count = sum(1 for row in evidence if row.get("evidence_type") == "line")
         photo_count = sum(1 for row in evidence if row.get("evidence_type") == "photo")
+        ocr_count = sum(1 for row in evidence if row.get("evidence_type") == "ocr")
+        vlm_count = sum(1 for row in evidence if row.get("evidence_type") == "vlm")
         row = {
             "id": event.get("id"),
             "date": event.get("date"),
@@ -117,6 +119,8 @@ def list_events_report(
             "event_evidence_count": len(evidence),
             "line_evidence_count": line_count,
             "photo_evidence_count": photo_count,
+            "ocr_evidence_count": ocr_count,
+            "vlm_evidence_count": vlm_count,
             "location_name": event.get("location_name"),
             "source": event.get("source"),
             "generation_method": event.get("generation_method"),
@@ -161,7 +165,9 @@ def format_event_list(rows: list[dict[str, Any]], *, with_evidence: bool = False
             "  evidence: "
             f"total={event['event_evidence_count']}, "
             f"line={event['line_evidence_count']}, "
-            f"photo={event['photo_evidence_count']}"
+            f"photo={event['photo_evidence_count']}, "
+            f"ocr={event.get('ocr_evidence_count', 0)}, "
+            f"vlm={event.get('vlm_evidence_count', 0)}"
         )
         if with_evidence:
             evidence = event.get("evidence") or {}
@@ -173,12 +179,22 @@ def format_event_list(rows: list[dict[str, Any]], *, with_evidence: bool = False
                 lines.append("  photo evidence:")
                 for item in evidence["photo"]:
                     lines.append(f"    - {item['captured_at']} {item['file_name']}")
+            if evidence.get("ocr"):
+                lines.append("  OCR evidence:")
+                for item in evidence["ocr"]:
+                    lines.append(f"    - {item['captured_at']} {item['text']}")
+            if evidence.get("vlm"):
+                lines.append("  VLM evidence:")
+                for item in evidence["vlm"]:
+                    lines.append(f"    - {item['captured_at']} {item['caption']}")
     return "\n".join(lines)
 
 
 def _evidence_preview(repository, evidence: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     line_rows: list[dict[str, Any]] = []
     photo_rows: list[dict[str, Any]] = []
+    ocr_rows: list[dict[str, Any]] = []
+    vlm_rows: list[dict[str, Any]] = []
     for row in evidence:
         evidence_type = row.get("evidence_type")
         if evidence_type == "line" and len(line_rows) < 5:
@@ -200,7 +216,25 @@ def _evidence_preview(repository, evidence: list[dict[str, Any]]) -> dict[str, l
                     "file_name": redact_text(record.get("file_name"), max_chars=80),
                 }
             )
-    return {"line": line_rows, "photo": photo_rows}
+        elif evidence_type == "ocr" and len(ocr_rows) < 5:
+            record = repository.get_media_ocr(str(row.get("evidence_id"))) or {}
+            ocr_rows.append(
+                {
+                    "id": row.get("evidence_id"),
+                    "captured_at": _time_preview(record.get("captured_at") or record.get("fallback_captured_at")),
+                    "text": redact_text(record.get("ocr_text_redacted") or record.get("ocr_text"), max_chars=60),
+                }
+            )
+        elif evidence_type == "vlm" and len(vlm_rows) < 5:
+            record = repository.get_media_vlm(str(row.get("evidence_id"))) or {}
+            vlm_rows.append(
+                {
+                    "id": row.get("evidence_id"),
+                    "captured_at": _time_preview(record.get("captured_at") or record.get("fallback_captured_at")),
+                    "caption": redact_text(record.get("short_caption") or record.get("caption"), max_chars=80),
+                }
+            )
+    return {"line": line_rows, "photo": photo_rows, "ocr": ocr_rows, "vlm": vlm_rows}
 
 
 def _modality_counts(events: list[dict[str, Any]], evidence_by_event: dict[str, list[dict[str, Any]]]) -> dict[str, int]:

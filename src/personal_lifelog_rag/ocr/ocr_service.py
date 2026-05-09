@@ -27,6 +27,7 @@ class OcrImagesOptions:
     dry_run: bool = False
     force: bool = False
     skip_existing: bool = False
+    media_ids: list[str] | None = None
 
 
 def run_ocr_images(
@@ -43,8 +44,11 @@ def run_ocr_images(
     rows = repository.list_media_items(
         start_date=options.start_date,
         end_date=options.end_date,
-        limit=max(options.limit, 0),
+        limit=1_000_000 if options.media_ids else max(options.limit, 0),
     )
+    if options.media_ids:
+        allowed_ids = set(options.media_ids)
+        rows = [row for row in rows if str(row.get("id")) in allowed_ids][: max(options.limit, 0)]
     report = OcrImagesReport(
         selected_images=len(rows),
         dry_run=options.dry_run,

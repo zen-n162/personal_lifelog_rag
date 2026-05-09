@@ -25,6 +25,28 @@ event_building:
   merge_window_minutes: 90
   gps_distance_meters: 500
 
+models:
+  vlm:
+    provider: null
+    engine: null
+    model_name: null
+    model_path: null
+    device: "auto"
+    dtype: "auto"
+    local_files_only: true
+    max_image_size: 1024
+    prompt_version: "qwen3_vl_lifelog_v1"
+    max_new_tokens: 512
+
+  multimodal_embedding:
+    provider: null
+    engine: null
+    model_name: null
+    model_path: null
+    device: "auto"
+    embedding_dim: null
+    batch_size: 4
+
 privacy:
   allow_network: false
   bind_host: 127.0.0.1

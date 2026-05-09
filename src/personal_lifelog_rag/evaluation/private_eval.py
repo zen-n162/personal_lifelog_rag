@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
+from personal_lifelog_rag.embeddings.multimodal_search import multimodal_search
+from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
+from personal_lifelog_rag.retrieval.evidence_strength import confidence_at_most, strength_at_least
 from personal_lifelog_rag.line.call_index import search_calls
 from personal_lifelog_rag.retrieval.answer_builder import build_answer
 from personal_lifelog_rag.retrieval.date_parser import parse_date_query
@@ -27,6 +30,9 @@ from personal_lifelog_rag.retrieval.temporal_search import (
     search_timeline,
 )
 from personal_lifelog_rag.vlm.schemas import ImageSearchOptions
+from personal_lifelog_rag.vlm.prompts import get_vlm_prompt_template
+from personal_lifelog_rag.vlm.review_service import apply_vlm_override_to_result
+from personal_lifelog_rag.vlm.safety import safety_check_text
 from personal_lifelog_rag.vlm.vlm_service import image_search
 
 
@@ -78,14 +84,32 @@ class PrivateEvalQuestion:
     expected_any_location_name: list[str] = field(default_factory=list)
     forbidden_exact_gps_in_answer: bool = False
     event_id: str | None = None
+    media_id: str | None = None
     expected_hidden: bool | None = None
     expected_pinned: bool | None = None
     expected_verified: bool | None = None
+    expected_searchable: bool | None = None
+    expected_event_usable: bool | None = None
     title_override_contains: str | None = None
     summary_override_contains: str | None = None
+    expected_media_ids: list[str] = field(default_factory=list)
+    should_exclude_media_ids: list[str] = field(default_factory=list)
     expected_min_ocr_success: int | None = None
     expected_min_vlm_success: int | None = None
+    expected_engine: str | None = None
+    allowed_safety_flags: list[str] = field(default_factory=list)
     forbidden_terms: list[str] = field(default_factory=list)
+    input_text: str | None = None
+    template: str | None = None
+    expected_flags: list[str] = field(default_factory=list)
+    expected_contains: list[str] = field(default_factory=list)
+    expected_no_overclaim: bool = False
+    max_vlm_only_high_confidence_events: int | None = None
+    expected_evidence_types_any: list[str] = field(default_factory=list)
+    expected_classification_any: list[str] = field(default_factory=list)
+    max_embedding_only_rank: int | None = None
+    max_vlm_only_confidence: str | None = None
+    expected_strength_at_least: str | None = None
 
 
 def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
@@ -103,7 +127,17 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
         if not isinstance(row, dict):
             continue
         case_type = str(row.get("type") or "date_qa")
-        question = str(row.get("question") or row.get("query") or row.get("date") or row.get("event_id") or "").strip()
+        question = str(
+            row.get("question")
+            or row.get("query")
+            or row.get("date")
+            or row.get("event_id")
+            or row.get("media_id")
+            or row.get("input_text")
+            or row.get("template")
+            or row.get("id")
+            or ""
+        ).strip()
         if not question:
             continue
         expected_dates = _string_list(row.get("expected_dates"))
@@ -152,14 +186,32 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
                 expected_any_location_name=_string_list(row.get("expected_any_location_name")),
                 forbidden_exact_gps_in_answer=bool(row.get("forbidden_exact_gps_in_answer", False)),
                 event_id=_none_or_str(row.get("event_id")),
+                media_id=_none_or_str(row.get("media_id")),
                 expected_hidden=_none_or_bool(row.get("expected_hidden")),
                 expected_pinned=_none_or_bool(row.get("expected_pinned")),
                 expected_verified=_none_or_bool(row.get("expected_verified")),
+                expected_searchable=_none_or_bool(row.get("expected_searchable")),
+                expected_event_usable=_none_or_bool(row.get("expected_event_usable")),
                 title_override_contains=_none_or_str(row.get("title_override_contains")),
                 summary_override_contains=_none_or_str(row.get("summary_override_contains")),
+                expected_media_ids=_string_list(row.get("expected_media_ids")),
+                should_exclude_media_ids=_string_list(row.get("should_exclude_media_ids")),
                 expected_min_ocr_success=_none_or_int(row.get("expected_min_ocr_success")),
                 expected_min_vlm_success=_none_or_int(row.get("expected_min_vlm_success")),
+                expected_engine=_none_or_str(row.get("expected_engine")),
+                allowed_safety_flags=_string_list(row.get("allowed_safety_flags")),
                 forbidden_terms=_string_list(row.get("forbidden_terms")),
+                input_text=_none_or_str(row.get("input_text")),
+                template=_none_or_str(row.get("template")),
+                expected_flags=_string_list(row.get("expected_flags")),
+                expected_contains=_string_list(row.get("expected_contains")),
+                expected_no_overclaim=bool(row.get("expected_no_overclaim", False)),
+                max_vlm_only_high_confidence_events=_none_or_int(row.get("max_vlm_only_high_confidence_events")),
+                expected_evidence_types_any=_string_list(row.get("expected_evidence_types_any")),
+                expected_classification_any=_string_list(row.get("expected_classification_any")),
+                max_embedding_only_rank=_none_or_int(row.get("max_embedding_only_rank")),
+                max_vlm_only_confidence=_none_or_str(row.get("max_vlm_only_confidence")),
+                expected_strength_at_least=_none_or_str(row.get("expected_strength_at_least")),
             )
         )
     return questions
@@ -406,16 +458,26 @@ def _evaluate_one(
         return _evaluate_call_search_case(repository, question)
     if question.case_type == "event_quality":
         return _evaluate_event_quality_case(repository, question)
+    if question.case_type == "event_rebuild_quality":
+        return _evaluate_event_rebuild_quality_case(repository, question)
     if question.case_type == "place_assignment":
         return _evaluate_place_assignment_case(repository, question)
     if question.case_type == "event_override":
         return _evaluate_event_override_case(repository, question)
+    if question.case_type == "vlm_review":
+        return _evaluate_vlm_review_case(repository, question)
     if question.case_type == "ocr_quality":
         return _evaluate_ocr_quality_case(repository, question)
     if question.case_type == "vlm_quality":
         return _evaluate_vlm_quality_case(repository, question)
+    if question.case_type == "vlm_safety":
+        return _evaluate_vlm_safety_case(question)
+    if question.case_type == "vlm_prompt":
+        return _evaluate_vlm_prompt_case(question)
     if question.case_type == "image_search":
         return _evaluate_image_search_case(repository, question)
+    if question.case_type == "multimodal_search":
+        return _evaluate_multimodal_search_case(repository, question)
     if question.case_type not in {"date_qa", "keyword_search"}:
         return _skip_case(question, f"unsupported case type: {question.case_type}")
     if question.case_type == "keyword_search":
@@ -683,12 +745,13 @@ def _evaluate_call_search_case(repository, question: PrivateEvalQuestion) -> dic
     filters = dict(question.filters)
     statuses = _statuses_from_filters(filters)
     min_duration = _none_or_int(filters.get("min_duration_sec"))
+    exact_date = _none_or_str(filters.get("date"))
     report = search_calls(
         repository,
         statuses=statuses,
         min_duration_sec=min_duration,
-        start_date=_none_or_str(filters.get("from") or filters.get("date_from")),
-        end_date=_none_or_str(filters.get("to") or filters.get("date_to")),
+        start_date=exact_date or _none_or_str(filters.get("from") or filters.get("date_from")),
+        end_date=exact_date or _none_or_str(filters.get("to") or filters.get("date_to")),
         limit=100,
     )
     results = list(report.get("results") or [])
@@ -724,7 +787,7 @@ def _evaluate_event_quality_case(repository, question: PrivateEvalQuestion) -> d
     target_date = question.date or question.expected_date or (question.expected_dates[0] if question.expected_dates else None)
     if not target_date:
         return _skip_case(question, "event_quality requires date")
-    events = repository.list_events(start_date=target_date, end_date=target_date, limit=10_000, include_hidden=True)
+    events = repository.list_events(start_date=target_date, end_date=target_date, limit=10_000, include_hidden=False)
     issues: list[str] = []
     if question.min_events is not None and len(events) < question.min_events:
         issues.append(f"events below expected_min_events: {len(events)} < {question.min_events}")
@@ -753,6 +816,16 @@ def _evaluate_event_quality_case(repository, question: PrivateEvalQuestion) -> d
     orphan_count = _orphan_evidence_count(repository, events)
     if question.no_orphan_evidence and orphan_count:
         issues.append(f"orphan evidence found: {orphan_count}")
+    vlm_only_high = 0
+    for event in events:
+        evidence = repository.list_event_evidence(str(event["id"]))
+        types = {str(row.get("evidence_type") or "") for row in evidence}
+        if "vlm" in types and "line" not in types and "ocr" not in types and float(event.get("confidence") or 0.0) >= 0.8:
+            vlm_only_high += 1
+    if question.max_vlm_only_high_confidence_events is not None and vlm_only_high > question.max_vlm_only_high_confidence_events:
+        issues.append(
+            f"VLM-only high confidence events too many: {vlm_only_high} > {question.max_vlm_only_high_confidence_events}"
+        )
 
     return _generic_case(
         question,
@@ -768,6 +841,53 @@ def _evaluate_event_quality_case(repository, question: PrivateEvalQuestion) -> d
             "line_only_low_value_events": len(line_only_low),
             "photo_and_line_events": len(photo_and_line),
             "orphan_evidence_count": orphan_count,
+            "vlm_only_high_confidence_events": vlm_only_high,
+        },
+    )
+
+
+def _evaluate_event_rebuild_quality_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    target_date = question.date or question.expected_date or (question.expected_dates[0] if question.expected_dates else None)
+    if not target_date:
+        return _skip_case(question, "event_rebuild_quality requires date")
+    events = repository.list_events(start_date=target_date, end_date=target_date, limit=10_000, include_hidden=True)
+    evidence_types = _event_evidence_types(repository, events)
+    issues: list[str] = []
+    if question.min_events is not None and len(events) < question.min_events:
+        issues.append(f"events below expected_min_events: {len(events)} < {question.min_events}")
+    expected_any = question.expected_evidence_types_any or question.expected_evidence_types
+    if expected_any and not any(item in evidence_types for item in expected_any):
+        issues.append("none of expected evidence types found: " + ", ".join(expected_any))
+    vlm_only_high = 0
+    overclaim_phrases = ("確実に食事した", "確実に新宿に行った", "確実に行った")
+    text_blob = "\n".join(str(event.get("title") or "") + "\n" + str(event.get("summary") or "") for event in events)
+    if question.expected_no_overclaim and any(phrase in text_blob for phrase in overclaim_phrases):
+        issues.append("overclaim phrase found")
+    for event in events:
+        evidence = repository.list_event_evidence(str(event["id"]))
+        types = {str(row.get("evidence_type") or "") for row in evidence}
+        if "vlm" in types and "line" not in types and "ocr" not in types and float(event.get("confidence") or 0.0) >= 0.8:
+            vlm_only_high += 1
+    if question.max_vlm_only_high_confidence_events is not None and vlm_only_high > question.max_vlm_only_high_confidence_events:
+        issues.append(
+            f"VLM-only high confidence events too many: {vlm_only_high} > {question.max_vlm_only_high_confidence_events}"
+        )
+    forbidden_found = _forbidden_claims_found(text_blob, question.forbidden_claims)
+    if forbidden_found:
+        issues.append("forbidden claims found: " + ", ".join(forbidden_found))
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        matched_dates=[target_date],
+        events_count=len(events),
+        event_evidence_count=sum(len(repository.list_event_evidence(str(event["id"]))) for event in events),
+        forbidden_claims_found=forbidden_found,
+        answer_preview=redact_text(text_blob, max_chars=240),
+        extra={
+            "date": target_date,
+            "evidence_types": sorted(evidence_types),
+            "vlm_only_high_confidence_events": vlm_only_high,
         },
     )
 
@@ -838,6 +958,43 @@ def _evaluate_event_override_case(repository, question: PrivateEvalQuestion) -> 
     )
 
 
+def _evaluate_vlm_review_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    media_id = question.media_id or question.question
+    base = repository.get_media_vlm(media_id) or {"media_id": media_id}
+    override = repository.get_media_vlm_override(media_id)
+    effective = apply_vlm_override_to_result(base)
+    issues: list[str] = []
+    if override is None:
+        has_expectations = any(
+            value is not None
+            for value in (
+                question.expected_hidden,
+                question.expected_verified,
+                question.expected_searchable,
+                question.expected_event_usable,
+            )
+        )
+        if not has_expectations:
+            return _skip_case(question, f"VLM override not found: {media_id}")
+        issues.append(f"VLM override not found: {media_id}")
+    for key, expected in (
+        ("is_hidden", question.expected_hidden),
+        ("is_verified", question.expected_verified),
+        ("is_searchable", question.expected_searchable),
+        ("is_event_usable", question.expected_event_usable),
+    ):
+        if expected is not None and int(bool(effective.get(key))) != int(bool(expected)):
+            issues.append(f"{key} mismatch: {effective.get(key)} != {int(bool(expected))}")
+
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        answer_preview=redact_text(json.dumps(effective, ensure_ascii=False), max_chars=240),
+        extra={"media_id": media_id, "review_status": effective.get("review_status")},
+    )
+
+
 def _evaluate_ocr_quality_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
     target_date = question.date or question.expected_date or (question.expected_dates[0] if question.expected_dates else None)
     if not target_date:
@@ -881,19 +1038,62 @@ def _evaluate_vlm_quality_case(repository, question: PrivateEvalQuestion) -> dic
         return _skip_case(question, "vlm_quality requires date")
     rows = repository.list_media_vlm(start_date=target_date, end_date=target_date, limit=100_000)
     status_counts: dict[str, int] = {}
-    caption_text = "\n".join(str(row.get("caption") or "") for row in rows)
+    searchable_text_parts: list[str] = []
+    safety_flag_counts: dict[str, int] = {}
+    success_engines: dict[str, int] = {}
+    empty_success_caption_count = 0
     for row in rows:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
+        searchable_text_parts.extend(
+            [
+                str(row.get("caption") or ""),
+                str(row.get("short_caption") or ""),
+                str(row.get("scene_tags_json") or ""),
+                str(row.get("object_tags_json") or ""),
+                str(row.get("activity_tags_json") or ""),
+                str(row.get("food_cues_json") or ""),
+                str(row.get("location_cues_json") or ""),
+                str(row.get("text_cues_json") or ""),
+            ]
+        )
+        if status == "success":
+            engine = str(row.get("vlm_engine") or "unknown")
+            success_engines[engine] = success_engines.get(engine, 0) + 1
+            if not str(row.get("caption") or "").strip():
+                empty_success_caption_count += 1
+        for flag in _json_string_list(row.get("safety_flags_json")):
+            safety_flag_counts[flag] = safety_flag_counts.get(flag, 0) + 1
+    caption_text = "\n".join(searchable_text_parts)
     success_count = status_counts.get("success", 0)
     issues: list[str] = []
     if question.expected_min_vlm_success is not None and success_count < question.expected_min_vlm_success:
         issues.append(
             f"VLM success below expected_min_vlm_success: {success_count} < {question.expected_min_vlm_success}"
         )
+    if question.expected_engine:
+        if success_engines and question.expected_engine not in success_engines:
+            issues.append(f"expected VLM engine not found: {question.expected_engine}")
+        unexpected_engines = sorted(engine for engine in success_engines if engine != question.expected_engine)
+        if unexpected_engines:
+            issues.append("unexpected success VLM engines found: " + ", ".join(unexpected_engines))
+    if empty_success_caption_count:
+        issues.append(f"success VLM rows with empty caption: {empty_success_caption_count}")
+    failed_count = status_counts.get("failed", 0)
+    engine_unavailable_count = status_counts.get("engine_unavailable", 0)
+    if failed_count:
+        issues.append(f"failed VLM rows found: {failed_count}")
+    if engine_unavailable_count:
+        issues.append(f"engine_unavailable VLM rows found: {engine_unavailable_count}")
     forbidden_found = [term for term in question.forbidden_terms if term in caption_text]
     if forbidden_found:
         issues.append("forbidden VLM terms found: " + ", ".join(forbidden_found))
+    disallowed_flags: list[str] = []
+    if question.allowed_safety_flags:
+        allowed = set(question.allowed_safety_flags)
+        disallowed_flags = sorted(flag for flag in safety_flag_counts if flag not in allowed)
+        if disallowed_flags:
+            issues.append("disallowed VLM safety flags found: " + ", ".join(disallowed_flags))
 
     return _generic_case(
         question,
@@ -908,7 +1108,62 @@ def _evaluate_vlm_quality_case(repository, question: PrivateEvalQuestion) -> dic
             "vlm_status_counts": dict(sorted(status_counts.items())),
             "vlm_success_count": success_count,
             "expected_min_vlm_success": question.expected_min_vlm_success,
+            "success_engines": dict(sorted(success_engines.items())),
+            "expected_engine": question.expected_engine,
+            "safety_flag_counts": dict(sorted(safety_flag_counts.items())),
+            "allowed_safety_flags": question.allowed_safety_flags,
+            "disallowed_safety_flags": disallowed_flags,
+            "empty_success_caption_count": empty_success_caption_count,
         },
+    )
+
+
+def _evaluate_vlm_safety_case(question: PrivateEvalQuestion) -> dict[str, Any]:
+    input_text = question.input_text or question.question
+    report = safety_check_text(input_text)
+    sanitized = str(report.get("sanitized") or "")
+    flags = set(str(flag) for flag in report.get("safety_flags", []))
+    issues: list[str] = []
+    missing_flags = [flag for flag in question.expected_flags if flag not in flags]
+    if missing_flags:
+        issues.append("missing expected safety flags: " + ", ".join(missing_flags))
+    forbidden_found = [term for term in question.forbidden_claims if term in sanitized]
+    if forbidden_found:
+        issues.append("forbidden phrases still present: " + ", ".join(forbidden_found))
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        forbidden_claims_found=forbidden_found,
+        answer_preview=redact_text(sanitized, max_chars=240),
+        extra={
+            "safety_flags": sorted(flags),
+            "violations": report.get("violations", []),
+            "sanitized": sanitized,
+        },
+    )
+
+
+def _evaluate_vlm_prompt_case(question: PrivateEvalQuestion) -> dict[str, Any]:
+    template_name = question.template or question.question
+    try:
+        template = get_vlm_prompt_template(template_name)
+    except ValueError as exc:
+        return _generic_case(
+            question,
+            status="fail",
+            issues=[str(exc)],
+            answer_preview="",
+            extra={"template": template_name},
+        )
+    prompt = template.prompt
+    issues = [text for text in question.expected_contains if text not in prompt]
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=[f"missing expected prompt text: {text}" for text in issues],
+        answer_preview=redact_text(prompt, max_chars=240),
+        extra={"template": template.name},
     )
 
 
@@ -917,26 +1172,115 @@ def _evaluate_image_search_case(repository, question: PrivateEvalQuestion) -> di
     report = image_search(repository, ImageSearchOptions(query=query, limit=10))
     results = list(report.get("results") or [])
     result_dates = [str(row.get("date")) for row in results if row.get("date")]
+    result_media_ids = [str(row.get("media_id")) for row in results if row.get("media_id")]
     issues: list[str] = []
     if question.expected_min_results is not None and len(results) < question.expected_min_results:
         issues.append(f"results below expected_min_results: {len(results)} < {question.expected_min_results}")
-    if question.expected_dates and not any(date in result_dates for date in question.expected_dates):
-        issues.append("expected image search dates missing: " + ", ".join(question.expected_dates))
-    if question.expected_evidence_types:
+    expected_dates = question.expected_top_dates or question.expected_dates
+    if expected_dates and not any(date in result_dates[:5] for date in expected_dates):
+        issues.append("expected image search dates missing: " + ", ".join(expected_dates))
+    expected_types = question.expected_evidence_types_any or question.expected_evidence_types
+    if expected_types:
         evidence_types = {str(item) for row in results for item in row.get("evidence_types", [])}
-        missing = [item for item in question.expected_evidence_types if item not in evidence_types]
-        if missing:
-            issues.append("missing expected evidence types: " + ", ".join(missing))
+        if question.expected_evidence_types_any:
+            if not any(item in evidence_types for item in expected_types):
+                issues.append("none of expected evidence types found: " + ", ".join(expected_types))
+        else:
+            missing = [item for item in expected_types if item not in evidence_types]
+            if missing:
+                issues.append("missing expected evidence types: " + ", ".join(missing))
+    missing_media_ids = [media_id for media_id in question.expected_media_ids if media_id not in result_media_ids]
+    if missing_media_ids:
+        issues.append("expected media ids missing: " + ", ".join(missing_media_ids))
+    excluded_found = [media_id for media_id in question.should_exclude_media_ids if media_id in result_media_ids]
+    if excluded_found:
+        issues.append("excluded media ids appeared: " + ", ".join(excluded_found))
+    answer_text = json.dumps(results[:5], ensure_ascii=False)
+    forbidden = _forbidden_claims_found(answer_text, question.forbidden_claims)
+    if forbidden:
+        issues.append("forbidden phrase found: " + ", ".join(forbidden))
     return _generic_case(
         question,
         status="pass" if not issues else "fail",
         issues=issues,
-        matched_dates=[date for date in question.expected_dates if date in result_dates],
+        matched_dates=[date for date in expected_dates if date in result_dates],
         photo_count=len(results),
-        answer_preview=redact_text(json.dumps(results[:5], ensure_ascii=False), max_chars=240),
+        forbidden_claims_found=forbidden,
+        answer_preview=redact_text(answer_text, max_chars=240),
         extra={
             "top_dates": result_dates[:5],
             "results_count": len(results),
+            "top_media_ids": result_media_ids[:5],
+        },
+    )
+
+
+def _evaluate_multimodal_search_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    query = question.query or question.question
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(
+            query=query,
+            limit=10,
+            backend="hybrid",
+        ),
+    )
+    results = list(report.get("results") or [])
+    result_dates = [str(row.get("date")) for row in results if row.get("date")]
+    issues: list[str] = []
+    if question.expected_min_results is not None and len(results) < question.expected_min_results:
+        issues.append(f"results below expected_min_results: {len(results)} < {question.expected_min_results}")
+    expected_dates = question.expected_top_dates or question.expected_dates
+    if expected_dates and not any(date in result_dates[:5] for date in expected_dates):
+        issues.append("expected multimodal dates missing: " + ", ".join(expected_dates))
+    expected_types = question.expected_evidence_types_any or question.expected_evidence_types
+    if expected_types:
+        evidence_types = {str(item) for row in results for item in row.get("evidence_types", [])}
+        if not any(item in evidence_types for item in expected_types):
+            issues.append("none of expected evidence types found: " + ", ".join(expected_types))
+    if question.expected_classification_any:
+        strengths = {str(row.get("evidence_strength") or "") for row in results}
+        labels = {str(item) for row in results for item in row.get("evidence_types", [])}
+        combined = strengths | labels | {str(row.get("classification") or "") for row in results}
+        if not any(item in combined for item in question.expected_classification_any):
+            issues.append("expected classification/evidence label missing: " + ", ".join(question.expected_classification_any))
+    if question.max_embedding_only_rank is not None:
+        for index, row in enumerate(results, start=1):
+            types = set(row.get("evidence_types") or [])
+            if types.issubset({"photo", "embedding"}) and index <= question.max_embedding_only_rank:
+                issues.append(f"embedding-only result ranked too high: rank {index}")
+                break
+    if question.max_vlm_only_confidence:
+        for index, row in enumerate(results, start=1):
+            types = set(row.get("evidence_types") or [])
+            if types.issubset({"photo", "vlm"}) and not confidence_at_most(str(row.get("confidence_label") or ""), question.max_vlm_only_confidence):
+                issues.append(
+                    f"VLM-only confidence too high at rank {index}: "
+                    f"{row.get('confidence_label')} > {question.max_vlm_only_confidence}"
+                )
+                break
+    if question.expected_strength_at_least and results:
+        top_strength = str(results[0].get("evidence_strength") or "")
+        if not strength_at_least(top_strength, question.expected_strength_at_least):
+            issues.append(
+                f"top evidence_strength below expected: {top_strength} < {question.expected_strength_at_least}"
+            )
+    answer_text = json.dumps(results[:5], ensure_ascii=False)
+    forbidden = _forbidden_claims_found(answer_text, question.forbidden_claims)
+    if forbidden:
+        issues.append("forbidden phrase found: " + ", ".join(forbidden))
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        matched_dates=[date for date in expected_dates if date in result_dates],
+        photo_count=len(results),
+        forbidden_claims_found=forbidden,
+        answer_preview=redact_text(answer_text, max_chars=240),
+        extra={
+            "top_dates": result_dates[:5],
+            "results_count": len(results),
+            "evidence_strengths": [row.get("evidence_strength") for row in results[:5]],
         },
     )
 
@@ -1069,6 +1413,10 @@ def _orphan_evidence_count(repository, events: list[dict[str, Any]]) -> int:
                 count += 0 if repository.get_embedding_record("line_message", evidence_id) else 1
             elif evidence_type == "photo":
                 count += 0 if repository.get_embedding_record("media_item", evidence_id) else 1
+            elif evidence_type == "ocr":
+                count += 0 if repository.get_media_ocr(evidence_id) else 1
+            elif evidence_type == "vlm":
+                count += 0 if repository.get_media_vlm(evidence_id) else 1
     return count
 
 
@@ -1498,6 +1846,23 @@ def _string_list(value: Any) -> list[str]:
         return [str(item) for item in value if str(item).strip()]
     text = str(value).strip()
     return [text] if text else []
+
+
+def _json_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return [text]
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if str(item).strip()]
+    return [str(parsed)] if str(parsed).strip() else []
 
 
 def _string_dict(value: Any) -> dict[str, str]:

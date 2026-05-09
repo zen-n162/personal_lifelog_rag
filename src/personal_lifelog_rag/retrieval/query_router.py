@@ -13,6 +13,8 @@ from personal_lifelog_rag.retrieval.local_search import (
     format_local_search_report,
     local_text_search,
 )
+from personal_lifelog_rag.embeddings.multimodal_search import format_multimodal_search, multimodal_search
+from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
 from personal_lifelog_rag.retrieval.query_intent import QueryIntentResult, classify_query_intent
 from personal_lifelog_rag.retrieval.temporal_search import search_timeline
 from personal_lifelog_rag.line.call_index import format_search_calls_report, search_calls
@@ -62,6 +64,7 @@ def route_query(
     today: date | None = None,
     limit: int = 5,
     include_hidden: bool = False,
+    multimodal_config: dict[str, Any] | None = None,
 ) -> RoutedQueryResult:
     intent_result = classify_query_intent(query, today=today)
     intent = intent_result.intent
@@ -85,6 +88,25 @@ def route_query(
     if intent in {"place_visit", "food_activity", "topic_mention", "person_interaction"}:
         search_intent = _search_intent_for(intent)
         search_query = _search_query_for(intent_result)
+        if intent in {"place_visit", "food_activity"} and _looks_like_image_query(query):
+            report = multimodal_search(
+                repository,
+                _multimodal_options(
+                    query=search_query if search_query != "ご飯" else query,
+                    date_from=intent_result.entities.get("date_from"),
+                    date_to=intent_result.entities.get("date_to"),
+                    limit=limit,
+                    backend="hybrid",
+                    include_hidden=include_hidden,
+                    config=multimodal_config,
+                ),
+            )
+            return _routed(
+                intent_result,
+                routing="multimodal-search",
+                answer=_format_multimodal_image_answer(query, report),
+                results=report["results"],
+            )
         report = local_text_search(
             repository,
             LocalSearchOptions(
@@ -156,6 +178,25 @@ def route_query(
         )
 
     if intent == "photo_activity":
+        if _looks_like_image_query(query):
+            report = multimodal_search(
+                repository,
+                _multimodal_options(
+                    query=query,
+                    date_from=intent_result.entities.get("date_from"),
+                    date_to=intent_result.entities.get("date_to"),
+                    limit=limit,
+                    backend="hybrid",
+                    include_hidden=include_hidden,
+                    config=multimodal_config,
+                ),
+            )
+            return _routed(
+                intent_result,
+                routing="multimodal-search",
+                answer=_format_multimodal_image_answer(query, report),
+                results=report["results"],
+            )
         rows = _photo_activity_results(
             repository,
             start_date=intent_result.entities.get("date_from"),
@@ -236,6 +277,39 @@ def _search_query_for(intent_result: QueryIntentResult) -> str:
     return str(raw_terms[0]) if raw_terms else intent_result.normalized_query
 
 
+def _multimodal_options(
+    *,
+    query: str,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+    backend: str,
+    include_hidden: bool,
+    config: dict[str, Any] | None,
+) -> MultimodalSearchOptions:
+    config = config or {}
+    return MultimodalSearchOptions(
+        query=query,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        backend=backend,  # type: ignore[arg-type]
+        include_hidden=include_hidden,
+        engine_name=config.get("engine"),
+        model_name=config.get("model_name"),
+        model_path=config.get("model_path"),
+        device=config.get("device", "auto"),
+        dtype=config.get("dtype"),
+        local_files_only=config.get("local_files_only", True),
+        embedding_dim=config.get("embedding_dim"),
+        batch_size=config.get("batch_size"),
+    )
+
+
+def _looks_like_image_query(query: str) -> bool:
+    return any(term in query for term in ("写真", "写って", "画像", "撮った", "撮影"))
+
+
 def _photo_activity_results(
     repository,
     *,
@@ -263,6 +337,27 @@ def _format_photo_activity(rows: list[dict[str, Any]]) -> str:
     lines = ["写真が多かった日:"]
     for index, row in enumerate(rows, start=1):
         lines.append(f"{index}. {row['date']} 写真={row['photos']} GPS付き={row['gps_photos']}")
+    return "\n".join(lines)
+
+
+def _format_multimodal_image_answer(query: str, report: dict[str, Any]) -> str:
+    if not report.get("results"):
+        return format_multimodal_search(report)
+    dates = sorted({str(row.get("date") or "") for row in report["results"] if row.get("date")})
+    primary_date = dates[0] if dates else "該当日"
+    lines = [
+        f"質問: {query}",
+        "",
+        f"画像解析では、{primary_date}に食事または料理の可能性がある写真が見つかりました。",
+        "これはQwen3-VLなどによるローカル画像解析の推定です。必要に応じて写真を確認してください。",
+        "",
+        "候補:",
+    ]
+    for row in report["results"][:5]:
+        cues = row.get("food_cues") or row.get("activity_tags") or row.get("matched_terms") or []
+        cue_text = ", ".join(cues[:6]) if cues else "VLM caption/tags"
+        lines.append(f"- {row.get('date')} {str(row.get('captured_at') or '')[11:16]} / cues: {cue_text} / evidence_strength={row.get('evidence_strength')}")
+    lines.extend(["", format_multimodal_search(report)])
     return "\n".join(lines)
 
 

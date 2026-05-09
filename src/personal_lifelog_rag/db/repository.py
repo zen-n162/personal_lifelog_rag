@@ -827,6 +827,9 @@ class LifelogRepository:
         activity_tags: list[str] | str | None = None,
         location_cues: list[str] | str | None = None,
         food_cues: list[str] | str | None = None,
+        text_cues: list[str] | str | None = None,
+        uncertainty_notes: list[str] | str | None = None,
+        evidence_strength: str | None = None,
         people_count: int | None = None,
         contains_text_hint: bool | int | None = None,
         safety_flags: list[str] | str | None = None,
@@ -853,6 +856,9 @@ class LifelogRepository:
                     activity_tags_json,
                     location_cues_json,
                     food_cues_json,
+                    text_cues_json,
+                    uncertainty_notes_json,
+                    evidence_strength,
                     people_count,
                     contains_text_hint,
                     safety_flags_json,
@@ -865,7 +871,7 @@ class LifelogRepository:
                     analyzed_at,
                     analysis_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
                 """,
                 (
                     media_id,
@@ -876,6 +882,9 @@ class LifelogRepository:
                     _json_or_none(activity_tags),
                     _json_or_none(location_cues),
                     _json_or_none(food_cues),
+                    _json_or_none(text_cues),
+                    _json_or_none(uncertainty_notes),
+                    evidence_strength,
                     people_count,
                     None if contains_text_hint is None else int(bool(contains_text_hint)),
                     _json_or_none(safety_flags),
@@ -907,7 +916,10 @@ class LifelogRepository:
                                 "activity_tags": activity_tags if isinstance(activity_tags, list) else [],
                                 "location_cues": location_cues if isinstance(location_cues, list) else [],
                                 "food_cues": food_cues if isinstance(food_cues, list) else [],
+                                "text_cues": text_cues if isinstance(text_cues, list) else [],
+                                "uncertainty_notes": uncertainty_notes if isinstance(uncertainty_notes, list) else [],
                                 "safety_flags": safety_flags if isinstance(safety_flags, list) else [],
+                                "evidence_strength": evidence_strength,
                             }
                         ),
                         media_id,
@@ -929,10 +941,26 @@ class LifelogRepository:
                 media_items.gps_lon,
                 media_ocr.ocr_text,
                 media_ocr.ocr_text_redacted,
-                media_ocr.status AS ocr_status
+                media_ocr.status AS ocr_status,
+                media_vlm_overrides.caption_override,
+                media_vlm_overrides.short_caption_override,
+                media_vlm_overrides.scene_tags_override_json,
+                media_vlm_overrides.object_tags_override_json,
+                media_vlm_overrides.activity_tags_override_json,
+                media_vlm_overrides.food_cues_override_json,
+                media_vlm_overrides.location_cues_override_json,
+                COALESCE(media_vlm_overrides.is_verified, 0) AS vlm_is_verified,
+                COALESCE(media_vlm_overrides.is_hidden, 0) AS vlm_is_hidden,
+                COALESCE(media_vlm_overrides.is_wrong, 0) AS vlm_is_wrong,
+                COALESCE(media_vlm_overrides.is_searchable, 1) AS vlm_is_searchable,
+                COALESCE(media_vlm_overrides.is_event_usable, 1) AS vlm_is_event_usable,
+                COALESCE(media_vlm_overrides.review_status, 'unreviewed') AS vlm_review_status,
+                media_vlm_overrides.review_note AS vlm_review_note,
+                media_vlm_overrides.updated_at AS vlm_override_updated_at
             FROM media_vlm
             LEFT JOIN media_items ON media_items.id = media_vlm.media_id
             LEFT JOIN media_ocr ON media_ocr.media_id = media_vlm.media_id
+            LEFT JOIN media_vlm_overrides ON media_vlm_overrides.media_id = media_vlm.media_id
             WHERE media_vlm.media_id = ?
             LIMIT 1
             """,
@@ -970,19 +998,20 @@ class LifelogRepository:
             clauses.append(
                 """
                 (
-                    COALESCE(media_vlm.caption, '') LIKE ?
-                    OR COALESCE(media_vlm.short_caption, '') LIKE ?
-                    OR COALESCE(media_vlm.scene_tags_json, '') LIKE ?
-                    OR COALESCE(media_vlm.object_tags_json, '') LIKE ?
-                    OR COALESCE(media_vlm.activity_tags_json, '') LIKE ?
-                    OR COALESCE(media_vlm.location_cues_json, '') LIKE ?
-                    OR COALESCE(media_vlm.food_cues_json, '') LIKE ?
+                    COALESCE(media_vlm_overrides.caption_override, media_vlm.caption, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.short_caption_override, media_vlm.short_caption, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.scene_tags_override_json, media_vlm.scene_tags_json, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.object_tags_override_json, media_vlm.object_tags_json, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.activity_tags_override_json, media_vlm.activity_tags_json, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.location_cues_override_json, media_vlm.location_cues_json, '') LIKE ?
+                    OR COALESCE(media_vlm_overrides.food_cues_override_json, media_vlm.food_cues_json, '') LIKE ?
+                    OR COALESCE(media_vlm.text_cues_json, '') LIKE ?
                     OR COALESCE(media_ocr.ocr_text, '') LIKE ?
                     OR COALESCE(media_items.file_name, '') LIKE ?
                 )
                 """
             )
-            params.extend([f"%{keyword}%"] * 9)
+            params.extend([f"%{keyword}%"] * 10)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         return self._fetch_all(
@@ -998,16 +1027,124 @@ class LifelogRepository:
                 media_items.gps_lon,
                 media_ocr.ocr_text,
                 media_ocr.ocr_text_redacted,
-                media_ocr.status AS ocr_status
+                media_ocr.status AS ocr_status,
+                media_vlm_overrides.caption_override,
+                media_vlm_overrides.short_caption_override,
+                media_vlm_overrides.scene_tags_override_json,
+                media_vlm_overrides.object_tags_override_json,
+                media_vlm_overrides.activity_tags_override_json,
+                media_vlm_overrides.food_cues_override_json,
+                media_vlm_overrides.location_cues_override_json,
+                COALESCE(media_vlm_overrides.is_verified, 0) AS vlm_is_verified,
+                COALESCE(media_vlm_overrides.is_hidden, 0) AS vlm_is_hidden,
+                COALESCE(media_vlm_overrides.is_wrong, 0) AS vlm_is_wrong,
+                COALESCE(media_vlm_overrides.is_searchable, 1) AS vlm_is_searchable,
+                COALESCE(media_vlm_overrides.is_event_usable, 1) AS vlm_is_event_usable,
+                COALESCE(media_vlm_overrides.review_status, 'unreviewed') AS vlm_review_status,
+                media_vlm_overrides.review_note AS vlm_review_note,
+                media_vlm_overrides.updated_at AS vlm_override_updated_at
             FROM media_vlm
             LEFT JOIN media_items ON media_items.id = media_vlm.media_id
             LEFT JOIN media_ocr ON media_ocr.media_id = media_vlm.media_id
+            LEFT JOIN media_vlm_overrides ON media_vlm_overrides.media_id = media_vlm.media_id
             {where_sql}
             ORDER BY {timestamp} ASC, media_vlm.media_id ASC
             LIMIT ?
             """,
             params,
         )
+
+    def get_media_vlm_override(self, media_id: str) -> dict[str, Any] | None:
+        rows = self._fetch_all(
+            "SELECT * FROM media_vlm_overrides WHERE media_id = ? LIMIT 1",
+            [media_id],
+        )
+        return rows[0] if rows else None
+
+    def list_media_vlm_overrides(self, *, limit: int = 100_000) -> list[dict[str, Any]]:
+        return self._fetch_all(
+            """
+            SELECT *
+            FROM media_vlm_overrides
+            ORDER BY updated_at DESC, media_id ASC
+            LIMIT ?
+            """,
+            [limit],
+        )
+
+    def upsert_media_vlm_override(
+        self,
+        *,
+        media_id: str,
+        caption_override: str | None = None,
+        short_caption_override: str | None = None,
+        scene_tags_override: list[str] | str | None = None,
+        object_tags_override: list[str] | str | None = None,
+        activity_tags_override: list[str] | str | None = None,
+        food_cues_override: list[str] | str | None = None,
+        location_cues_override: list[str] | str | None = None,
+        is_verified: bool | int | None = None,
+        is_hidden: bool | int | None = None,
+        is_wrong: bool | int | None = None,
+        is_searchable: bool | int | None = None,
+        is_event_usable: bool | int | None = None,
+        review_status: str | None = None,
+        review_note: str | None = None,
+    ) -> None:
+        with closing(connect(self.db_path)) as connection:
+            initialize_schema(connection)
+            existing = connection.execute(
+                "SELECT * FROM media_vlm_overrides WHERE media_id = ?",
+                (media_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO media_vlm_overrides (
+                    media_id,
+                    caption_override,
+                    short_caption_override,
+                    scene_tags_override_json,
+                    object_tags_override_json,
+                    activity_tags_override_json,
+                    food_cues_override_json,
+                    location_cues_override_json,
+                    is_verified,
+                    is_hidden,
+                    is_wrong,
+                    is_searchable,
+                    is_event_usable,
+                    review_status,
+                    review_note,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    media_id,
+                    caption_override if caption_override is not None else (existing["caption_override"] if existing else None),
+                    short_caption_override if short_caption_override is not None else (existing["short_caption_override"] if existing else None),
+                    _json_or_none(scene_tags_override) if scene_tags_override is not None else (existing["scene_tags_override_json"] if existing else None),
+                    _json_or_none(object_tags_override) if object_tags_override is not None else (existing["object_tags_override_json"] if existing else None),
+                    _json_or_none(activity_tags_override) if activity_tags_override is not None else (existing["activity_tags_override_json"] if existing else None),
+                    _json_or_none(food_cues_override) if food_cues_override is not None else (existing["food_cues_override_json"] if existing else None),
+                    _json_or_none(location_cues_override) if location_cues_override is not None else (existing["location_cues_override_json"] if existing else None),
+                    _resolve_bool_default(is_verified, existing["is_verified"] if existing else None, default=0),
+                    _resolve_bool_default(is_hidden, existing["is_hidden"] if existing else None, default=0),
+                    _resolve_bool_default(is_wrong, existing["is_wrong"] if existing else None, default=0),
+                    _resolve_bool_default(is_searchable, existing["is_searchable"] if existing else None, default=1),
+                    _resolve_bool_default(is_event_usable, existing["is_event_usable"] if existing else None, default=1),
+                    review_status or (existing["review_status"] if existing else "unreviewed"),
+                    review_note if review_note is not None else (existing["review_note"] if existing else None),
+                ),
+            )
+            connection.commit()
+
+    def delete_media_vlm_override(self, media_id: str) -> int:
+        with closing(connect(self.db_path)) as connection:
+            initialize_schema(connection)
+            cursor = connection.execute("DELETE FROM media_vlm_overrides WHERE media_id = ?", (media_id,))
+            connection.commit()
+            return int(cursor.rowcount or 0)
 
     def list_events(
         self,
@@ -1079,7 +1216,19 @@ class LifelogRepository:
                     FROM event_evidence
                     WHERE event_evidence.event_id = events.id
                       AND event_evidence.evidence_type = 'photo'
-                ) AS photo_evidence_count
+                ) AS photo_evidence_count,
+                (
+                    SELECT COUNT(*)
+                    FROM event_evidence
+                    WHERE event_evidence.event_id = events.id
+                      AND event_evidence.evidence_type = 'ocr'
+                ) AS ocr_evidence_count,
+                (
+                    SELECT COUNT(*)
+                    FROM event_evidence
+                    WHERE event_evidence.event_id = events.id
+                      AND event_evidence.evidence_type = 'vlm'
+                ) AS vlm_evidence_count
             FROM events
             LEFT JOIN event_overrides ON event_overrides.event_id = events.id
             {where_sql}
@@ -1266,14 +1415,10 @@ class LifelogRepository:
                 )
             ).fetchall()
             media_rows = connection.execute(
-                *_search_query(
-                    table_name="media_items",
-                    columns=["file_name", "caption", "ocr_text"],
+                *_search_media_items_query(
                     terms=clean_terms,
-                    timestamp_expr="COALESCE(captured_at, fallback_captured_at)",
                     start_date=start_date,
                     end_date=end_date,
-                    order_sql="COALESCE(captured_at, fallback_captured_at) ASC, id ASC",
                     limit=limit,
                 )
             ).fetchall()
@@ -1291,6 +1436,7 @@ class LifelogRepository:
                     start_date=start_date,
                     end_date=end_date,
                     limit=limit,
+                    include_hidden=include_hidden,
                 )
             ).fetchall()
 
@@ -1500,6 +1646,12 @@ def _resolve_bool(value: bool | None, existing: Any) -> int:
     return int(bool(value))
 
 
+def _resolve_bool_default(value: bool | int | None, existing: Any, *, default: int) -> int:
+    if value is None:
+        return int(bool(existing)) if existing is not None else int(bool(default))
+    return int(bool(value))
+
+
 def _search_query(
     *,
     table_name: str,
@@ -1532,6 +1684,59 @@ def _search_query(
         FROM {table_name}
         WHERE {' AND '.join(clauses)}
         ORDER BY {order_sql}
+        LIMIT ?
+    """
+    return query, params
+
+
+def _search_media_items_query(
+    *,
+    terms: list[str],
+    start_date: str | None,
+    end_date: str | None,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    timestamp = "COALESCE(media_items.captured_at, media_items.fallback_captured_at)"
+    clauses: list[str] = []
+    params: list[Any] = []
+    term_clauses: list[str] = []
+    for term in terms:
+        like_value = f"%{term}%"
+        term_clauses.append("COALESCE(media_items.file_name, '') LIKE ?")
+        params.append(like_value)
+        term_clauses.append("COALESCE(media_items.ocr_text, '') LIKE ?")
+        params.append(like_value)
+        term_clauses.append(
+            """
+            (
+                COALESCE(media_items.caption, '') LIKE ?
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM media_vlm
+                    WHERE media_vlm.media_id = media_items.id
+                      AND (
+                        LOWER(COALESCE(media_vlm.vlm_engine, '')) LIKE '%fake%'
+                        OR LOWER(COALESCE(media_vlm.model_name, '')) LIKE '%fake%'
+                        OR media_vlm.status IN ('failed', 'engine_unavailable', 'skipped', 'no_visual_content')
+                      )
+                )
+            )
+            """
+        )
+        params.append(like_value)
+    clauses.append("(" + " OR ".join(term_clauses) + ")")
+    if start_date is not None:
+        clauses.append(f"substr({timestamp}, 1, 10) >= ?")
+        params.append(start_date)
+    if end_date is not None:
+        clauses.append(f"substr({timestamp}, 1, 10) <= ?")
+        params.append(end_date)
+    params.append(limit)
+    query = f"""
+        SELECT media_items.*
+        FROM media_items
+        WHERE {' AND '.join(clauses)}
+        ORDER BY {timestamp} ASC, media_items.id ASC
         LIMIT ?
     """
     return query, params
@@ -1600,7 +1805,19 @@ def _search_events_query(
                 FROM event_evidence
                 WHERE event_evidence.event_id = events.id
                   AND event_evidence.evidence_type = 'photo'
-            ) AS photo_evidence_count
+            ) AS photo_evidence_count,
+            (
+                SELECT COUNT(*)
+                FROM event_evidence
+                WHERE event_evidence.event_id = events.id
+                  AND event_evidence.evidence_type = 'ocr'
+            ) AS ocr_evidence_count,
+            (
+                SELECT COUNT(*)
+                FROM event_evidence
+                WHERE event_evidence.event_id = events.id
+                  AND event_evidence.evidence_type = 'vlm'
+            ) AS vlm_evidence_count
         FROM events
         LEFT JOIN event_overrides ON event_overrides.event_id = events.id
         WHERE {' AND '.join(clauses)}
@@ -1663,18 +1880,20 @@ def _search_media_vlm_query(
     start_date: str | None,
     end_date: str | None,
     limit: int,
+    include_hidden: bool = False,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     term_clauses: list[str] = []
     for column in (
-        "media_vlm.caption",
-        "media_vlm.short_caption",
-        "media_vlm.scene_tags_json",
-        "media_vlm.object_tags_json",
-        "media_vlm.activity_tags_json",
-        "media_vlm.location_cues_json",
-        "media_vlm.food_cues_json",
+        "COALESCE(media_vlm_overrides.caption_override, media_vlm.caption)",
+        "COALESCE(media_vlm_overrides.short_caption_override, media_vlm.short_caption)",
+        "COALESCE(media_vlm_overrides.scene_tags_override_json, media_vlm.scene_tags_json)",
+        "COALESCE(media_vlm_overrides.object_tags_override_json, media_vlm.object_tags_json)",
+        "COALESCE(media_vlm_overrides.activity_tags_override_json, media_vlm.activity_tags_json)",
+        "COALESCE(media_vlm_overrides.location_cues_override_json, media_vlm.location_cues_json)",
+        "COALESCE(media_vlm_overrides.food_cues_override_json, media_vlm.food_cues_json)",
+        "media_vlm.text_cues_json",
         "media_ocr.ocr_text",
         "media_items.file_name",
     ):
@@ -1682,6 +1901,9 @@ def _search_media_vlm_query(
             term_clauses.append(f"COALESCE({column}, '') LIKE ?")
             params.append(f"%{term}%")
     clauses.append("(" + " OR ".join(term_clauses) + ")")
+    clauses.append("media_vlm.status = 'success'")
+    clauses.append("LOWER(COALESCE(media_vlm.vlm_engine, '')) NOT LIKE '%fake%'")
+    clauses.append("LOWER(COALESCE(media_vlm.model_name, '')) NOT LIKE '%fake%'")
     timestamp = "COALESCE(media_items.captured_at, media_items.fallback_captured_at)"
     if start_date is not None:
         clauses.append(f"substr({timestamp}, 1, 10) >= ?")
@@ -1689,6 +1911,11 @@ def _search_media_vlm_query(
     if end_date is not None:
         clauses.append(f"substr({timestamp}, 1, 10) <= ?")
         params.append(end_date)
+    if not include_hidden:
+        clauses.append("COALESCE(media_vlm_overrides.is_hidden, 0) = 0")
+        clauses.append("COALESCE(media_vlm_overrides.is_wrong, 0) = 0")
+        clauses.append("COALESCE(media_vlm_overrides.is_searchable, 1) = 1")
+        clauses.append("COALESCE(media_vlm_overrides.review_status, 'unreviewed') NOT IN ('rejected', 'wrong')")
     params.append(limit)
     query = f"""
         SELECT
@@ -1703,10 +1930,25 @@ def _search_media_vlm_query(
             media_items.gps_lon,
             media_ocr.ocr_text,
             media_ocr.ocr_text_redacted,
-            media_ocr.status AS ocr_status
+            media_ocr.status AS ocr_status,
+            media_vlm_overrides.caption_override,
+            media_vlm_overrides.short_caption_override,
+            media_vlm_overrides.scene_tags_override_json,
+            media_vlm_overrides.object_tags_override_json,
+            media_vlm_overrides.activity_tags_override_json,
+            media_vlm_overrides.food_cues_override_json,
+            media_vlm_overrides.location_cues_override_json,
+            COALESCE(media_vlm_overrides.is_verified, 0) AS vlm_is_verified,
+            COALESCE(media_vlm_overrides.is_hidden, 0) AS vlm_is_hidden,
+            COALESCE(media_vlm_overrides.is_wrong, 0) AS vlm_is_wrong,
+            COALESCE(media_vlm_overrides.is_searchable, 1) AS vlm_is_searchable,
+            COALESCE(media_vlm_overrides.is_event_usable, 1) AS vlm_is_event_usable,
+            COALESCE(media_vlm_overrides.review_status, 'unreviewed') AS vlm_review_status,
+            media_vlm_overrides.review_note AS vlm_review_note
         FROM media_vlm
         LEFT JOIN media_items ON media_items.id = media_vlm.media_id
         LEFT JOIN media_ocr ON media_ocr.media_id = media_vlm.media_id
+        LEFT JOIN media_vlm_overrides ON media_vlm_overrides.media_id = media_vlm.media_id
         WHERE {' AND '.join(clauses)}
         ORDER BY {timestamp} ASC, media_vlm.media_id ASC
         LIMIT ?

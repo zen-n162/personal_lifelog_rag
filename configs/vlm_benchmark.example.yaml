@@ -1,0 +1,33 @@
+# Dummy benchmark cases. Real benchmark images belong under private_eval/ and
+# must not be committed.
+
+cases:
+  - id: food_sample
+    image_path: "private_eval/vlm_benchmark/images/food/sample.jpg"
+    query_texts:
+      - "料理の写真"
+      - "ご飯を食べた写真"
+    expected_tags_any:
+      - "food"
+      - "meal_possible"
+      - "restaurant_possible"
+    forbidden_terms:
+      - "恋人"
+      - "彼女"
+      - "家族"
+      - "病気"
+
+  - id: station_sample
+    image_path: "private_eval/vlm_benchmark/images/place/sample.jpg"
+    query_texts:
+      - "駅の写真"
+      - "街中の写真"
+    expected_tags_any:
+      - "station_possible"
+      - "city_possible"
+      - "outdoor"
+    forbidden_terms:
+      - "恋人"
+      - "彼女"
+      - "家族"
+      - "病気"

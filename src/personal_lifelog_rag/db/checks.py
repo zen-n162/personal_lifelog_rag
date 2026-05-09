@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+import json
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,13 @@ def run_db_check(db_path: str | Path) -> dict[str, Any]:
             "media_items": _media_item_checks(connection),
             "media_ocr": _media_ocr_checks(connection),
             "media_vlm": _media_vlm_checks(connection),
+            "media_vlm_overrides": _media_vlm_override_checks(connection),
+            "media_embeddings": _media_embedding_checks(connection),
             "line_messages": _line_message_checks(connection),
             "line_call_events": _line_call_event_checks(connection),
             "events": _event_checks(connection),
             "event_evidence": _event_evidence_checks(connection),
+            "analysis_jobs": _analysis_job_checks(connection),
         }
     report["strict"] = _strict_summary(report)
     return report
@@ -36,10 +40,13 @@ def format_db_check(report: dict[str, Any]) -> str:
     media = report["media_items"]
     media_ocr = report["media_ocr"]
     media_vlm = report["media_vlm"]
+    media_vlm_overrides = report["media_vlm_overrides"]
+    media_embeddings = report["media_embeddings"]
     line = report["line_messages"]
     calls = report["line_call_events"]
     events = report["events"]
     evidence = report["event_evidence"]
+    analysis_jobs = report["analysis_jobs"]
     strict = report["strict"]
 
     lines = ["DB integrity check", ""]
@@ -121,6 +128,51 @@ def format_db_check(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "media_vlm_overrides:",
+            f"- total: {media_vlm_overrides['total']}",
+            f"- orphan media_id refs: {media_vlm_overrides['orphan_media_refs']}",
+            f"- hidden: {media_vlm_overrides['hidden_count']}",
+            f"- wrong: {media_vlm_overrides['wrong_count']}",
+            f"- not_searchable: {media_vlm_overrides['not_searchable_count']}",
+            f"- not_event_usable: {media_vlm_overrides['not_event_usable_count']}",
+            f"- unknown review_status: {media_vlm_overrides['unknown_status_count']}",
+            f"- invalid JSON tags: {media_vlm_overrides['invalid_json_count']}",
+            "- review_status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(media_vlm_overrides["status_counts"], "review_status"))
+    lines.extend(_sample_lines("orphan VLM override media IDs", media_vlm_overrides["orphan_media_sample_ids"]))
+    lines.extend(_sample_lines("invalid VLM override media IDs", media_vlm_overrides["invalid_json_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "media_embeddings:",
+            f"- total: {media_embeddings['total']}",
+            "- type counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(media_embeddings["type_counts"], "embedding_type"))
+    lines.append("- model counts:")
+    lines.extend(_count_rows_lines(media_embeddings["model_counts"], "embedding_model"))
+    lines.append("- status counts:")
+    lines.extend(_count_rows_lines(media_embeddings["status_counts"], "status"))
+    lines.extend(
+        [
+            f"- orphan media_id refs: {media_embeddings['orphan_media_refs']}",
+            f"- invalid status: {media_embeddings['invalid_status_count']}",
+            f"- unknown format: {media_embeddings['unknown_format_count']}",
+            f"- success empty embedding: {media_embeddings['success_empty_embedding']}",
+            f"- dimension mismatch: {media_embeddings['dimension_mismatch_count']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan embedding media IDs", media_embeddings["orphan_media_sample_ids"]))
+    lines.extend(_sample_lines("invalid embedding status media IDs", media_embeddings["invalid_status_sample_ids"]))
+    lines.extend(_sample_lines("dimension mismatch embedding media IDs", media_embeddings["dimension_mismatch_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
             "line_messages:",
             f"- total: {line['total']}",
             f"- duplicate id groups: {line['duplicate_id_groups']}",
@@ -193,12 +245,45 @@ def format_db_check(report: dict[str, Any]) -> str:
         [
             f"- missing photo evidence refs: {evidence['missing_photo_refs']}",
             f"- missing line evidence refs: {evidence['missing_line_refs']}",
+            f"- missing VLM evidence refs: {evidence['missing_vlm_refs']}",
+            f"- non-success VLM evidence refs: {evidence['non_success_vlm_refs']}",
+            f"- failed VLM evidence refs: {evidence['failed_vlm_refs']}",
+            f"- engine_unavailable VLM evidence refs: {evidence['engine_unavailable_vlm_refs']}",
+            f"- fake VLM evidence refs: {evidence['fake_vlm_refs']}",
+            f"- invalid VLM evidence refs: {evidence['invalid_vlm_refs']}",
             f"- orphan event refs: {evidence['orphan_event_refs']}",
         ]
     )
     lines.extend(_sample_lines("missing photo evidence IDs", evidence["missing_photo_sample_ids"]))
     lines.extend(_sample_lines("missing line evidence IDs", evidence["missing_line_sample_ids"]))
+    lines.extend(_sample_lines("invalid VLM evidence IDs", evidence["invalid_vlm_sample_ids"]))
     lines.extend(_sample_lines("orphan event evidence IDs", evidence["orphan_event_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "analysis_jobs:",
+            f"- total jobs: {analysis_jobs['total_jobs']}",
+            f"- total job items: {analysis_jobs['total_items']}",
+            "- job status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(analysis_jobs["job_status_counts"], "status"))
+    lines.append("- item status counts:")
+    lines.extend(_count_rows_lines(analysis_jobs["item_status_counts"], "status"))
+    lines.extend(
+        [
+            f"- failed jobs: {analysis_jobs['failed_jobs']}",
+            f"- stale running jobs: {analysis_jobs['stale_running_jobs']}",
+            f"- orphan job items: {analysis_jobs['orphan_job_items']}",
+            f"- invalid job status: {analysis_jobs['invalid_job_status_count']}",
+            f"- invalid item status: {analysis_jobs['invalid_item_status_count']}",
+            f"- item count mismatch: {analysis_jobs['item_count_mismatch']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan job item IDs", analysis_jobs["orphan_job_item_sample_ids"]))
+    lines.extend(_sample_lines("invalid job IDs", analysis_jobs["invalid_job_status_sample_ids"]))
+    lines.extend(_sample_lines("invalid job item IDs", analysis_jobs["invalid_item_status_sample_ids"]))
 
     lines.extend(["", "strict:"])
     lines.append(f"- ok: {strict['ok']}")
@@ -422,6 +507,207 @@ def _media_vlm_checks(connection) -> dict[str, Any]:
     }
 
 
+def _media_vlm_override_checks(connection) -> dict[str, Any]:
+    valid_statuses = ("unreviewed", "accepted", "rejected", "needs_fix", "wrong")
+    placeholders = ", ".join("?" for _ in valid_statuses)
+    rows = _rows(
+        connection,
+        """
+        SELECT media_id,
+               scene_tags_override_json,
+               object_tags_override_json,
+               activity_tags_override_json,
+               food_cues_override_json,
+               location_cues_override_json
+        FROM media_vlm_overrides
+        ORDER BY media_id ASC
+        """,
+    )
+    invalid_json_ids: list[str] = []
+    for row in rows:
+        for key in (
+            "scene_tags_override_json",
+            "object_tags_override_json",
+            "activity_tags_override_json",
+            "food_cues_override_json",
+            "location_cues_override_json",
+        ):
+            raw = row.get(key)
+            if raw and not _is_valid_json(raw):
+                _append_sample(invalid_json_ids, row.get("media_id"))
+                break
+    return {
+        "total": _count(connection, "SELECT COUNT(*) FROM media_vlm_overrides"),
+        "status_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(review_status, '(null)') AS review_status, COUNT(*) AS count
+            FROM media_vlm_overrides
+            GROUP BY review_status
+            ORDER BY count DESC, review_status ASC
+            """,
+        ),
+        "orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_vlm_overrides
+            LEFT JOIN media_items ON media_items.id = media_vlm_overrides.media_id
+            WHERE media_items.id IS NULL
+            """,
+        ),
+        "orphan_media_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT media_vlm_overrides.media_id AS id
+            FROM media_vlm_overrides
+            LEFT JOIN media_items ON media_items.id = media_vlm_overrides.media_id
+            WHERE media_items.id IS NULL
+            ORDER BY media_vlm_overrides.media_id ASC
+            LIMIT ?
+            """,
+        ),
+        "hidden_count": _count(connection, "SELECT COUNT(*) FROM media_vlm_overrides WHERE COALESCE(is_hidden, 0) = 1"),
+        "wrong_count": _count(connection, "SELECT COUNT(*) FROM media_vlm_overrides WHERE COALESCE(is_wrong, 0) = 1 OR review_status = 'wrong'"),
+        "not_searchable_count": _count(connection, "SELECT COUNT(*) FROM media_vlm_overrides WHERE COALESCE(is_searchable, 1) = 0"),
+        "not_event_usable_count": _count(connection, "SELECT COUNT(*) FROM media_vlm_overrides WHERE COALESCE(is_event_usable, 1) = 0"),
+        "unknown_status_count": _count_params(
+            connection,
+            f"SELECT COUNT(*) FROM media_vlm_overrides WHERE review_status IS NULL OR review_status NOT IN ({placeholders})",
+            list(valid_statuses),
+        ),
+        "invalid_json_count": len(invalid_json_ids),
+        "invalid_json_sample_ids": invalid_json_ids,
+    }
+
+
+def _media_embedding_checks(connection) -> dict[str, Any]:
+    valid_statuses = ("pending", "success", "skipped", "failed", "engine_unavailable")
+    valid_formats = ("float32_numpy", "json")
+    status_placeholders = ", ".join("?" for _ in valid_statuses)
+    format_placeholders = ", ".join("?" for _ in valid_formats)
+    return {
+        "total": _count(connection, "SELECT COUNT(*) FROM media_embeddings"),
+        "type_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(embedding_type, '(null)') AS embedding_type, COUNT(*) AS count
+            FROM media_embeddings
+            GROUP BY embedding_type
+            ORDER BY count DESC, embedding_type ASC
+            """,
+        ),
+        "model_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(embedding_model, '(null)') AS embedding_model, COUNT(*) AS count
+            FROM media_embeddings
+            GROUP BY embedding_model
+            ORDER BY count DESC, embedding_model ASC
+            """,
+        ),
+        "status_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS count
+            FROM media_embeddings
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """,
+        ),
+        "orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_embeddings
+            LEFT JOIN media_items ON media_items.id = media_embeddings.media_id
+            WHERE media_items.id IS NULL
+            """,
+        ),
+        "orphan_media_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT media_embeddings.media_id AS id
+            FROM media_embeddings
+            LEFT JOIN media_items ON media_items.id = media_embeddings.media_id
+            WHERE media_items.id IS NULL
+            ORDER BY media_embeddings.media_id ASC
+            LIMIT ?
+            """,
+        ),
+        "invalid_status_count": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM media_embeddings
+            WHERE status IS NULL OR status NOT IN ({status_placeholders})
+            """,
+            list(valid_statuses),
+        ),
+        "invalid_status_sample_ids": _sample_query_params(
+            connection,
+            f"""
+            SELECT media_id AS id
+            FROM media_embeddings
+            WHERE status IS NULL OR status NOT IN ({status_placeholders})
+            ORDER BY media_id ASC
+            LIMIT ?
+            """,
+            list(valid_statuses),
+        ),
+        "unknown_format_count": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM media_embeddings
+            WHERE embedding_format IS NULL OR embedding_format NOT IN ({format_placeholders})
+            """,
+            list(valid_formats),
+        ),
+        "success_empty_embedding": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_embeddings
+            WHERE status = 'success'
+              AND (embedding IS NULL OR length(embedding) = 0)
+            """,
+        ),
+        "dimension_mismatch_count": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_embeddings
+            WHERE status = 'success'
+              AND embedding_format = 'float32_numpy'
+              AND (
+                  embedding_dim IS NULL
+                  OR embedding_dim <= 0
+                  OR embedding IS NULL
+                  OR length(embedding) != embedding_dim * 4
+              )
+            """,
+        ),
+        "dimension_mismatch_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT media_id AS id
+            FROM media_embeddings
+            WHERE status = 'success'
+              AND embedding_format = 'float32_numpy'
+              AND (
+                  embedding_dim IS NULL
+                  OR embedding_dim <= 0
+                  OR embedding IS NULL
+                  OR length(embedding) != embedding_dim * 4
+              )
+            ORDER BY media_id ASC
+            LIMIT ?
+            """,
+        ),
+    }
+
+
 def _line_call_event_checks(connection) -> dict[str, Any]:
     return {
         "total": _count(connection, "SELECT COUNT(*) FROM line_call_events"),
@@ -558,6 +844,91 @@ def _event_evidence_checks(connection) -> dict[str, Any]:
             LIMIT ?
             """,
         ),
+        "missing_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            LEFT JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND media_vlm.media_id IS NULL
+            """,
+        ),
+        "non_success_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND COALESCE(media_vlm.status, '') != 'success'
+            """,
+        ),
+        "failed_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND media_vlm.status = 'failed'
+            """,
+        ),
+        "engine_unavailable_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND media_vlm.status = 'engine_unavailable'
+            """,
+        ),
+        "fake_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND (
+                LOWER(COALESCE(media_vlm.vlm_engine, '')) LIKE '%fake%'
+                OR LOWER(COALESCE(media_vlm.model_name, '')) LIKE '%fake%'
+              )
+            """,
+        ),
+        "invalid_vlm_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_evidence
+            LEFT JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND (
+                media_vlm.media_id IS NULL
+                OR COALESCE(media_vlm.status, '') != 'success'
+                OR LOWER(COALESCE(media_vlm.vlm_engine, '')) LIKE '%fake%'
+                OR LOWER(COALESCE(media_vlm.model_name, '')) LIKE '%fake%'
+              )
+            """,
+        ),
+        "invalid_vlm_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT event_evidence.event_id || ':' || event_evidence.evidence_id AS id
+            FROM event_evidence
+            LEFT JOIN media_vlm ON media_vlm.media_id = event_evidence.evidence_id
+            WHERE event_evidence.evidence_type = 'vlm'
+              AND (
+                media_vlm.media_id IS NULL
+                OR COALESCE(media_vlm.status, '') != 'success'
+                OR LOWER(COALESCE(media_vlm.vlm_engine, '')) LIKE '%fake%'
+                OR LOWER(COALESCE(media_vlm.model_name, '')) LIKE '%fake%'
+              )
+            ORDER BY event_evidence.event_id ASC, event_evidence.evidence_id ASC
+            LIMIT ?
+            """,
+        ),
         "orphan_event_refs": _count(
             connection,
             """
@@ -581,14 +952,121 @@ def _event_evidence_checks(connection) -> dict[str, Any]:
     }
 
 
+def _analysis_job_checks(connection) -> dict[str, Any]:
+    valid_job_statuses = ("planned", "running", "completed", "failed", "canceled", "partial")
+    valid_item_statuses = ("pending", "running", "success", "failed", "skipped", "engine_unavailable")
+    job_placeholders = ", ".join("?" for _ in valid_job_statuses)
+    item_placeholders = ", ".join("?" for _ in valid_item_statuses)
+    return {
+        "total_jobs": _count(connection, "SELECT COUNT(*) FROM analysis_jobs"),
+        "total_items": _count(connection, "SELECT COUNT(*) FROM analysis_job_items"),
+        "job_status_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS count
+            FROM analysis_jobs
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """,
+        ),
+        "item_status_counts": _rows(
+            connection,
+            """
+            SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS count
+            FROM analysis_job_items
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """,
+        ),
+        "failed_jobs": _count(connection, "SELECT COUNT(*) FROM analysis_jobs WHERE status = 'failed'"),
+        "stale_running_jobs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM analysis_jobs
+            WHERE status = 'running'
+              AND julianday('now') - julianday(COALESCE(started_at, created_at)) > 1
+            """,
+        ),
+        "orphan_job_items": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM analysis_job_items
+            LEFT JOIN analysis_jobs ON analysis_jobs.job_id = analysis_job_items.job_id
+            WHERE analysis_jobs.job_id IS NULL
+            """,
+        ),
+        "orphan_job_item_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT analysis_job_items.job_id || ':' || analysis_job_items.item_id AS id
+            FROM analysis_job_items
+            LEFT JOIN analysis_jobs ON analysis_jobs.job_id = analysis_job_items.job_id
+            WHERE analysis_jobs.job_id IS NULL
+            ORDER BY analysis_job_items.job_id ASC, analysis_job_items.item_id ASC
+            LIMIT ?
+            """,
+        ),
+        "invalid_job_status_count": _count_params(
+            connection,
+            f"SELECT COUNT(*) FROM analysis_jobs WHERE status IS NULL OR status NOT IN ({job_placeholders})",
+            list(valid_job_statuses),
+        ),
+        "invalid_job_status_sample_ids": _sample_query_params(
+            connection,
+            f"""
+            SELECT job_id AS id
+            FROM analysis_jobs
+            WHERE status IS NULL OR status NOT IN ({job_placeholders})
+            ORDER BY job_id ASC
+            LIMIT ?
+            """,
+            list(valid_job_statuses),
+        ),
+        "invalid_item_status_count": _count_params(
+            connection,
+            f"SELECT COUNT(*) FROM analysis_job_items WHERE status IS NULL OR status NOT IN ({item_placeholders})",
+            list(valid_item_statuses),
+        ),
+        "invalid_item_status_sample_ids": _sample_query_params(
+            connection,
+            f"""
+            SELECT job_id || ':' || item_id AS id
+            FROM analysis_job_items
+            WHERE status IS NULL OR status NOT IN ({item_placeholders})
+            ORDER BY job_id ASC, item_id ASC
+            LIMIT ?
+            """,
+            list(valid_item_statuses),
+        ),
+        "item_count_mismatch": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM analysis_jobs
+            LEFT JOIN (
+                SELECT job_id, COUNT(*) AS actual_count
+                FROM analysis_job_items
+                GROUP BY job_id
+            ) item_counts ON item_counts.job_id = analysis_jobs.job_id
+            WHERE COALESCE(analysis_jobs.total_items, 0) != COALESCE(item_counts.actual_count, 0)
+            """,
+        ),
+    }
+
+
 def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
     media = report["media_items"]
     media_ocr = report["media_ocr"]
     media_vlm = report["media_vlm"]
+    media_vlm_overrides = report["media_vlm_overrides"]
+    media_embeddings = report["media_embeddings"]
     line = report["line_messages"]
     calls = report["line_call_events"]
     events = report["events"]
     evidence = report["event_evidence"]
+    analysis_jobs = report["analysis_jobs"]
     issues: list[str] = []
 
     if line["duplicate_id_groups"]:
@@ -615,6 +1093,22 @@ def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
         issues.append(f"media_vlm invalid status rows: {media_vlm['invalid_status_count']}")
     if media_vlm["success_caption_empty"]:
         issues.append(f"media_vlm success caption empty: {media_vlm['success_caption_empty']}")
+    if media_vlm_overrides["orphan_media_refs"]:
+        issues.append(f"media_vlm_overrides orphan media refs: {media_vlm_overrides['orphan_media_refs']}")
+    if media_vlm_overrides["unknown_status_count"]:
+        issues.append(f"media_vlm_overrides unknown review_status rows: {media_vlm_overrides['unknown_status_count']}")
+    if media_vlm_overrides["invalid_json_count"]:
+        issues.append(f"media_vlm_overrides invalid JSON rows: {media_vlm_overrides['invalid_json_count']}")
+    if media_embeddings["orphan_media_refs"]:
+        issues.append(f"media_embeddings orphan media refs: {media_embeddings['orphan_media_refs']}")
+    if media_embeddings["invalid_status_count"]:
+        issues.append(f"media_embeddings invalid status rows: {media_embeddings['invalid_status_count']}")
+    if media_embeddings["unknown_format_count"]:
+        issues.append(f"media_embeddings unknown format rows: {media_embeddings['unknown_format_count']}")
+    if media_embeddings["success_empty_embedding"]:
+        issues.append(f"media_embeddings success empty embedding: {media_embeddings['success_empty_embedding']}")
+    if media_embeddings["dimension_mismatch_count"]:
+        issues.append(f"media_embeddings dimension mismatch: {media_embeddings['dimension_mismatch_count']}")
     if events["date_null"]:
         issues.append(f"events date NULL/empty: {events['date_null']}")
     if evidence["orphan_event_refs"]:
@@ -623,6 +1117,16 @@ def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
         issues.append(f"photo evidence missing media_items refs: {evidence['missing_photo_refs']}")
     if evidence["missing_line_refs"]:
         issues.append(f"line evidence missing line_messages refs: {evidence['missing_line_refs']}")
+    if evidence["invalid_vlm_refs"]:
+        issues.append(f"VLM evidence invalid media_vlm refs: {evidence['invalid_vlm_refs']}")
+    if analysis_jobs["orphan_job_items"]:
+        issues.append(f"analysis_job_items orphan job refs: {analysis_jobs['orphan_job_items']}")
+    if analysis_jobs["invalid_job_status_count"]:
+        issues.append(f"analysis_jobs invalid status rows: {analysis_jobs['invalid_job_status_count']}")
+    if analysis_jobs["invalid_item_status_count"]:
+        issues.append(f"analysis_job_items invalid status rows: {analysis_jobs['invalid_item_status_count']}")
+    if analysis_jobs["item_count_mismatch"]:
+        issues.append(f"analysis_jobs item count mismatch: {analysis_jobs['item_count_mismatch']}")
 
     return {
         "ok": not issues,
@@ -726,6 +1230,20 @@ def _sample_lines(label: str, samples: list[str]) -> list[str]:
     if not samples:
         return [f"- {label}: none"]
     return [f"- {label}: {', '.join(samples)}"]
+
+
+def _count_rows_lines(rows: list[dict[str, Any]], key: str) -> list[str]:
+    if not rows:
+        return ["  - none"]
+    return [f"  - {row.get(key)}: {row.get('count')}" for row in rows]
+
+
+def _is_valid_json(raw: Any) -> bool:
+    try:
+        json.loads(str(raw))
+    except json.JSONDecodeError:
+        return False
+    return True
 
 
 def _format_float(value: Any) -> str:

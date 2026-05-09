@@ -6,6 +6,7 @@ thumbnails/
 private_eval/
 private_config/
 eval_outputs/
+reports/
 ocr_outputs/
 vlm_outputs/
 *.sqlite
@@ -14,6 +15,7 @@ vlm_outputs/
 # Environment and secrets
 .env
 .venv/
+.venv_disabled_*/
 venv/
 .agents/
 .codex/

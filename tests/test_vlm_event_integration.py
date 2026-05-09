@@ -22,7 +22,8 @@ def test_build_events_uses_vlm_analysis_json_as_weak_photo_text(tmp_path: Path) 
         caption="ラーメンの可能性がある料理写真",
         short_caption="ラーメン写真の可能性",
         food_cues=["ramen_possible"],
-        vlm_engine="fake",
+        vlm_engine="unit_test_vlm",
+        model_name="unit-test-vlm",
         status="success",
         confidence=0.8,
     )
@@ -32,4 +33,3 @@ def test_build_events_uses_vlm_analysis_json_as_weak_photo_text(tmp_path: Path) 
     events = repository.list_events(start_date="2024-12-24", end_date="2024-12-24")
     assert events[0]["title"] == "食事・カフェの可能性"
     assert "VLM" in (events[0]["summary"] or "")
-

@@ -1,0 +1,21 @@
+# Dummy local model runtime example.
+# Copy to private_config/model_runtime.yaml and edit manually.
+# The app never downloads models automatically.
+
+models:
+  vlm:
+    engine: "qwen3_vl_transformers"
+    model_name: "Qwen/Qwen3-VL-8B-Instruct"
+    model_path: null
+    device: "auto"
+    dtype: "auto"
+    local_files_only: true
+    prompt_version: "lifelog_structured_tags_v1"
+    max_image_size: 1024
+    max_new_tokens: 512
+
+  multimodal_embedding:
+    engine: "qwen3_vl_embedding_sentence_transformers"
+    model_name: "Qwen/Qwen3-VL-Embedding-2B"
+    model_path: null
+    device: "auto"

@@ -43,6 +43,9 @@ vlm = [
 vlm-ollama = [
   "requests>=2.31",
 ]
+vlm-embedding = [
+  "sentence-transformers>=2.7",
+]
 
 [project.scripts]
 personal-lifelog-rag = "personal_lifelog_rag.app.cli:main"

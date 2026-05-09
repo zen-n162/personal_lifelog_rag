@@ -26,5 +26,10 @@ def test_vlm_safety_removes_sensitive_relationship_and_attribute_terms() -> None
 def test_safe_json_object_falls_back_to_caption_text() -> None:
     payload = safe_json_object("カフェの可能性がある写真")
 
-    assert payload["caption"] == "カフェの可能性がある写真"
+    assert payload["_parse_error"] == "invalid_json"
 
+
+def test_safe_json_object_extracts_embedded_json() -> None:
+    payload = safe_json_object('prefix {"caption": "カフェの可能性"} suffix')
+
+    assert payload["caption"] == "カフェの可能性"

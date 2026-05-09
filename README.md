@@ -48,7 +48,13 @@ pip install -e ".[vlm]"
 Tesseract itself must be installed locally outside Python. PaddleOCR and
 Ollama/llama.cpp can also be used as local backends through environment
 variables; no cloud image analysis is used. See `docs/ocr_setup.md` and
-`docs/vlm_setup.md` for the privacy-first operating notes.
+`docs/vlm_setup.md` for the privacy-first operating notes. See
+`docs/vlm_model_selection.md` for Qwen3-VL and Qwen3-VL-Embedding role
+separation and benchmark workflow. See `docs/vlm_prompting_and_safety.md` for
+Qwen3-VL prompt templates, safety filtering, and evidence-strength rules. See
+`docs/reporting.md` for privacy-preserving Markdown report export. See
+`docs/private_eval_20241224.md` for creating a local baseline private eval suite
+around an inspected date.
 
 ## Directory Layout
 
@@ -338,6 +344,7 @@ python -m personal_lifelog_rag.app.cli eval-private --path private_eval/question
 python -m personal_lifelog_rag.app.cli eval-private --path private_eval/questions.yaml --save-run
 python -m personal_lifelog_rag.app.cli eval-private --path private_eval/questions.yaml --case-id date_001
 python -m personal_lifelog_rag.app.cli eval-private --path private_eval/questions.yaml --strict
+python -m personal_lifelog_rag.app.cli make-private-eval-template --date 2024-12-24 --output private_eval/questions_20241224.yaml
 python -m personal_lifelog_rag.app.cli eval-compare --before eval_outputs/eval_A.json --after eval_outputs/eval_B.json
 ```
 
@@ -355,6 +362,8 @@ Supported private eval case types:
 - `routed_qa`: `qa` routing, answer safety, top dates, and search classification checks.
 - `call_search`: completed/missed/unanswered/canceled call filters and duration conditions.
 - `event_quality`: event count, evidence type, orphan evidence, and low-value event checks.
+- `vlm_quality`: VLM success count, engine, forbidden terms, allowed safety flags, and non-empty captions.
+- `image_search` / `multimodal_search`: image/VLM/embedding retrieval dates, evidence types, result counts, strength, and overclaim checks.
 - `place_assignment`: safe `location_name` checks without exact GPS leakage.
 - `event_override`: hidden/pinned/verified and override text checks.
 
@@ -560,12 +569,59 @@ model-specific wiring. Endpoints must bind to `127.0.0.1`, `localhost`, or
 Useful VLM commands:
 
 ```bash
+python -m personal_lifelog_rag.app.cli vlm-prompt --template lifelog_structured_tags_v1
+python -m personal_lifelog_rag.app.cli vlm-safety-check --text "彼女と楽しそうにご飯を食べている写真です"
 python -m personal_lifelog_rag.app.cli analyze-images --date 2024-12-24 --dry-run --limit 5
-python -m personal_lifelog_rag.app.cli analyze-images --date 2024-12-24 --engine fake --limit 5 --force
+python -m personal_lifelog_rag.app.cli analyze-images --date 2024-12-24 --engine fake --prompt-template lifelog_structured_tags_v1 --limit 5 --force
 python -m personal_lifelog_rag.app.cli vlm-stats
 python -m personal_lifelog_rag.app.cli vlm-show --date 2024-12-24 --limit 10
 python -m personal_lifelog_rag.app.cli image-search "ラーメン"
 ```
+
+Qwen-style model selection benchmarks keep captioning and retrieval separate:
+
+```bash
+python -m personal_lifelog_rag.app.cli vlm-model-info
+python -m personal_lifelog_rag.app.cli vlm-model-info --config private_config/model_runtime.yaml
+python -m personal_lifelog_rag.app.cli benchmark-vlm --cases configs/vlm_benchmark.example.yaml --engine fake --json
+python -m personal_lifelog_rag.app.cli benchmark-image-embedding --cases configs/vlm_benchmark.example.yaml --engine fake --json
+python -m personal_lifelog_rag.app.cli benchmark-qwen-multimodal --cases configs/vlm_benchmark.example.yaml --engine fake --save
+```
+
+Qwen3-VL is evaluated for caption/tags/event cues. Qwen3-VL-Embedding is
+evaluated for text-to-image retrieval and future indexing. Real model settings
+belong in `private_config/model_runtime.yaml`; benchmark images and run outputs
+belong in ignored `private_eval/` or `eval_outputs/` paths.
+
+Build and search local multimodal embeddings:
+
+```bash
+python -m personal_lifelog_rag.app.cli build-image-embeddings --date 2024-12-24 --engine fake --limit 10 --force
+python -m personal_lifelog_rag.app.cli build-text-embeddings --date 2024-12-24 --engine fake --type combined_text --force
+python -m personal_lifelog_rag.app.cli embedding-stats
+python -m personal_lifelog_rag.app.cli multimodal-search "ご飯を食べた写真" --backend hybrid --limit 10
+python -m personal_lifelog_rag.app.cli image-search "カフェ" --backend hybrid --limit 10
+python -m personal_lifelog_rag.app.cli qa "ご飯を食べた写真はいつ？"
+```
+
+`media_embeddings` stores local image/caption/OCR/combined-text vectors. Hybrid
+search reranks embedding candidates with OCR, VLM captions/tags, LINE mentions,
+events, places, and manual overrides. Embedding-only and VLM-only results are
+kept as weak candidates and should not be treated as definitive facts. See
+`docs/multimodal_search.md`.
+
+Heavy OCR/VLM/embedding runs can be planned and resumed through the analysis
+job manager:
+
+```bash
+python -m personal_lifelog_rag.app.cli analysis-plan --type vlm --date 2024-12-24
+python -m personal_lifelog_rag.app.cli analysis-run --type vlm --date 2024-12-24 --engine fake --limit 5 --save-report
+python -m personal_lifelog_rag.app.cli analysis-status --recent 5
+python -m personal_lifelog_rag.app.cli storage-stats
+```
+
+See `docs/analysis_job_management.md` for resume/retry/version-change cleanup
+and DB maintenance workflow.
 
 ## Current Capabilities
 
@@ -591,9 +647,12 @@ python -m personal_lifelog_rag.app.cli image-search "ラーメン"
   canceled calls, and summarize call duration locally.
 - Validate local place dictionaries, cluster GPS photos into candidate places,
   and assign safe place names to generated events without reverse geocoding.
-- Build local SQLite embeddings for future semantic/hybrid search.
+- Build local SQLite text embeddings and media embeddings for semantic/hybrid
+  image search.
 - Store local OCR/caption outputs and per-image analysis JSON when optional
   local engines are configured.
+- Search image content with local OCR/VLM metadata and optional local
+  Qwen3-VL-Embedding style vectors.
 - Build rule-based event candidates from photo clusters, LINE clusters, nearby
   GPS, location/activity words, and caption/OCR text.
 - Save event evidence links with `photo` and `line` evidence types.

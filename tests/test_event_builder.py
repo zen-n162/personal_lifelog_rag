@@ -65,8 +65,8 @@ def test_build_events_merges_photo_and_line_when_times_are_close(tmp_path) -> No
     events = repository.list_events(start_date="2024-12-24", end_date="2024-12-24")
     evidence = repository.list_event_evidence(events[0]["id"])
     assert len(events) == 1
-    assert {row["evidence_type"] for row in evidence} == {"line", "photo"}
-    assert len(evidence) == 4
+    assert {row["evidence_type"] for row in evidence} == {"line", "photo", "ocr", "vlm"}
+    assert len(evidence) == 6
 
 
 def test_build_events_is_idempotent_for_same_date(tmp_path) -> None:
