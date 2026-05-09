@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,18 @@ from personal_lifelog_rag.ui.event_review_service import (
     make_eval_case_yaml,
     review_queue,
     review_rows_for_dataframe,
+)
+from personal_lifelog_rag.ui.monthly_summary_service import monthly_summary_for_ui
+from personal_lifelog_rag.ui.multimodal_search_service import (
+    detail_values as multimodal_detail_values,
+    mark_search_result_for_review,
+    multimodal_search_for_ui,
+    search_result_detail_for_ui,
+)
+from personal_lifelog_rag.ui.report_viewer_service import (
+    generate_report_for_ui,
+    list_reports_for_ui,
+    load_report_for_ui,
 )
 from personal_lifelog_rag.ui.vlm_review_service import (
     VlmOverrideUpdate,
@@ -211,33 +224,91 @@ def create_app(db_path: str | Path | None = None):
         from_text: str,
         to_text: str,
         limit_value: float | None,
-    ) -> tuple[str, list[list[str]]]:
-        report = multimodal_search(
+        include_hidden: bool = False,
+        include_sensitive_vlm: bool = False,
+    ) -> tuple[str, list[list[Any]], Any, str, str, str, str, str, str, str, str]:
+        del include_sensitive_vlm
+        payload = multimodal_search_for_ui(
             _repository(),
-            MultimodalSearchOptions(
-                query=query_text,
+            query=query_text,
+            date_from=_blank_or_none(from_text),
+            date_to=_blank_or_none(to_text),
+            limit=_int_or_none(limit_value) or 10,
+            backend=backend_value,
+            include_hidden=include_hidden,
+        )
+        selected = payload["media_ids"][0] if payload["media_ids"] else None
+        details = multimodal_detail_values(search_result_detail_for_ui(_repository(), selected))
+        return (
+            payload["summary_text"],
+            payload["rows"],
+            gr.update(choices=payload["media_ids"], value=selected),
+            *details,
+        )
+
+    def _multimodal_detail_ui(media_id: str | None):
+        return multimodal_detail_values(search_result_detail_for_ui(_repository(), media_id))
+
+    def _multimodal_quick_action(media_id: str | None, action: str):
+        detail = mark_search_result_for_review(_repository(), media_id, action)
+        return (*multimodal_detail_values(detail), f"{action} を保存しました。")
+
+    def _monthly_summary_ui(
+        month_text: str,
+        from_text: str,
+        to_text: str,
+        mode_text: str,
+        include_hidden: bool,
+    ):
+        try:
+            payload = monthly_summary_for_ui(
+                _repository(),
+                month=_blank_or_none(month_text),
                 date_from=_blank_or_none(from_text),
                 date_to=_blank_or_none(to_text),
-                limit=_int_or_none(limit_value) or 10,
-                backend=backend_value,  # type: ignore[arg-type]
-            ),
+                mode=mode_text,
+                include_hidden=include_hidden,
+            )
+        except ValueError as exc:
+            return str(exc), [], [], [], []
+        return (
+            payload["summary_text"],
+            payload["metrics"],
+            payload["title_distribution_rows"],
+            payload["representative_day_rows"],
+            payload["representative_event_rows"],
         )
-        rows = [
-            [
-                row["date"],
-                row["media_id"],
-                row["file_name"],
-                row["captured_at"],
-                row.get("caption") or "",
-                row.get("ocr_preview") or "",
-                row["evidence_strength"],
-                row["score_components"]["final_score"],
-                ", ".join(row.get("evidence_types") or []),
-                row.get("thumbnail_path") or "",
-            ]
-            for row in report["results"]
-        ]
-        return format_multimodal_search(report), rows
+
+    def _report_choices() -> Any:
+        reports = list_reports_for_ui()
+        return gr.update(choices=reports, value=reports[0] if reports else None)
+
+    def _load_report_ui(path: str | None):
+        payload = load_report_for_ui(path)
+        return payload.get("markdown", ""), payload.get("json_summary", ""), payload.get("path", "")
+
+    def _generate_report_ui(
+        from_text: str,
+        to_text: str,
+        mode_text: str,
+        include_examples: bool,
+        save_json: bool,
+    ):
+        payload = generate_report_for_ui(
+            _repository(),
+            start_date=_blank_or_none(from_text),
+            end_date=_blank_or_none(to_text),
+            mode=mode_text,
+            include_examples=include_examples,
+            save_json=save_json,
+        )
+        reports = list_reports_for_ui()
+        return (
+            gr.update(choices=reports, value=payload.get("markdown_path") or (reports[0] if reports else None)),
+            payload.get("markdown", ""),
+            payload.get("json_summary", ""),
+            payload.get("markdown_path", ""),
+        )
 
     def _ask(question: str) -> tuple[str, list[list[str]], list[list[str]], str, int, int, int]:
         repository = _repository()
@@ -466,29 +537,49 @@ def create_app(db_path: str | Path | None = None):
         )
 
     def _load_vlm_review_queue(
+        month_text: str,
         date_text: str,
         from_text: str,
         to_text: str,
         status_value: str,
         unreviewed: bool,
         safety_flags: bool,
+        food_cues: bool,
+        performance_stage: bool,
+        has_ocr: bool,
+        has_embedding: bool,
+        event_linked: bool,
+        failed_only: bool,
         low_confidence: float | None,
         limit_value: float | None,
     ):
         status = None if status_value == "all" else status_value
+        resolved_from, resolved_to = _month_or_dates(month_text, from_text, to_text)
         rows = list_vlm_review_items(
             _repository(),
             VlmReviewFilters(
                 date=_blank_or_none(date_text),
-                date_from=_blank_or_none(from_text),
-                date_to=_blank_or_none(to_text),
+                date_from=resolved_from,
+                date_to=resolved_to,
                 review_status=status,
                 unreviewed=unreviewed,
                 safety_flags=safety_flags,
+                food_cues=food_cues,
+                has_ocr=has_ocr,
+                has_embedding=has_embedding,
+                event_linked=True if event_linked else None,
                 low_confidence=low_confidence,
                 limit=_int_or_none(limit_value) or 100,
             ),
         )
+        if performance_stage:
+            rows = [
+                row
+                for row in rows
+                if _contains_any(row, ("performance", "stage", "theater", "dancing", "パフォーマンス", "ステージ"))
+            ]
+        if failed_only:
+            rows = [row for row in rows if str(row.get("status") or "") == "failed"]
         choices = [str(row["media_id"]) for row in rows if row.get("media_id")]
         selected = choices[0] if choices else None
         return (
@@ -731,6 +822,33 @@ def create_app(db_path: str | Path | None = None):
                 ],
             )
 
+        with gr.Tab("Monthly Summary"):
+            with gr.Row():
+                monthly_month = gr.Textbox(label="年月", value="2025-01", placeholder="YYYY-MM")
+                monthly_from = gr.Textbox(label="from date", placeholder="YYYY-MM-DD")
+                monthly_to = gr.Textbox(label="to date", placeholder="YYYY-MM-DD")
+                monthly_mode = gr.Dropdown(label="表示モード", choices=["public", "private"], value="public")
+                monthly_include_hidden = gr.Checkbox(label="include hidden (private only)", value=False)
+            monthly_button = gr.Button("月次要約を表示")
+            monthly_text = gr.Textbox(label="月次要約本文", lines=16, interactive=False)
+            monthly_metrics = gr.Dataframe(headers=["metric", "value"], label="集計", interactive=False)
+            monthly_titles = gr.Dataframe(headers=["title", "count"], label="title分布", interactive=False)
+            monthly_days = gr.Dataframe(
+                headers=["date", "events", "photos", "gps_photos", "line", "calls", "vlm", "ocr"],
+                label="代表日 top5",
+                interactive=False,
+            )
+            monthly_events = gr.Dataframe(
+                headers=["date", "time", "title", "summary", "confidence", "line", "photo", "ocr", "vlm"],
+                label="代表イベント",
+                interactive=False,
+            )
+            monthly_button.click(
+                _monthly_summary_ui,
+                inputs=[monthly_month, monthly_from, monthly_to, monthly_mode, monthly_include_hidden],
+                outputs=[monthly_text, monthly_metrics, monthly_titles, monthly_days, monthly_events],
+            )
+
         with gr.Tab("Image Search"):
             image_query = gr.Textbox(label="Image query", value="ラーメン")
             image_limit = gr.Number(label="limit", value=20, precision=0)
@@ -754,33 +872,102 @@ def create_app(db_path: str | Path | None = None):
                 mm_from = gr.Textbox(label="date_from", placeholder="YYYY-MM-DD")
                 mm_to = gr.Textbox(label="date_to", placeholder="YYYY-MM-DD")
                 mm_limit = gr.Number(label="limit", value=10, precision=0)
+                mm_include_hidden = gr.Checkbox(label="include_hidden", value=False)
+                mm_include_sensitive = gr.Checkbox(label="include_sensitive_vlm", value=False)
             mm_button = gr.Button("Search")
             mm_summary = gr.Textbox(label="Summary", lines=12, interactive=False)
             mm_table = gr.Dataframe(
                 headers=[
-                    "date",
+                    "rank",
                     "media_id",
-                    "file_name",
+                    "date",
                     "captured_at",
-                    "caption",
-                    "OCR",
-                    "evidence_strength",
                     "score",
-                    "evidence_types",
+                    "confidence",
+                    "evidence_strength",
+                    "caption",
+                    "matched_terms",
+                    "food_cues",
+                    "location_cues",
+                    "related_event",
                     "thumbnail_path",
+                    "score_components",
+                    "review_status",
                 ],
                 label="Multimodal results",
                 interactive=False,
             )
+            selected_mm_media_id = gr.Dropdown(label="Search Result Detail media_id", choices=[], value=None)
+            mm_thumbnail = gr.Image(label="thumbnail", type="filepath", interactive=False)
+            with gr.Row():
+                mm_file_name = gr.Textbox(label="file_name", interactive=False)
+                mm_captured_at = gr.Textbox(label="captured_at", interactive=False)
+                mm_review_status = gr.Textbox(label="review_status", interactive=False)
+            mm_caption = gr.Textbox(label="VLM caption", lines=3, interactive=False)
+            mm_ocr_text = gr.Textbox(label="OCR text", lines=3, interactive=False)
+            mm_evidence = gr.Textbox(label="evidence", lines=5, interactive=False)
+            mm_score_components = gr.Textbox(label="score_components", lines=3, interactive=False)
+            with gr.Row():
+                mm_accept = gr.Button("Mark accepted")
+                mm_wrong = gr.Button("Mark wrong")
+                mm_hide = gr.Button("Hide")
+                mm_not_searchable = gr.Button("Not searchable")
+                mm_not_event_usable = gr.Button("Not event usable")
+            mm_detail_status = gr.Textbox(label="review action status", interactive=False)
+            mm_detail_outputs = [
+                mm_thumbnail,
+                mm_file_name,
+                mm_captured_at,
+                mm_caption,
+                mm_ocr_text,
+                mm_evidence,
+                mm_review_status,
+                mm_score_components,
+            ]
             mm_button.click(
                 _multimodal_search_ui,
-                inputs=[mm_query, mm_backend, mm_from, mm_to, mm_limit],
-                outputs=[mm_summary, mm_table],
+                inputs=[mm_query, mm_backend, mm_from, mm_to, mm_limit, mm_include_hidden, mm_include_sensitive],
+                outputs=[mm_summary, mm_table, selected_mm_media_id, *mm_detail_outputs],
+            )
+            selected_mm_media_id.change(_multimodal_detail_ui, inputs=selected_mm_media_id, outputs=mm_detail_outputs)
+            mm_accept.click(lambda media_id: _multimodal_quick_action(media_id, "accepted"), inputs=selected_mm_media_id, outputs=[*mm_detail_outputs, mm_detail_status])
+            mm_wrong.click(lambda media_id: _multimodal_quick_action(media_id, "wrong"), inputs=selected_mm_media_id, outputs=[*mm_detail_outputs, mm_detail_status])
+            mm_hide.click(lambda media_id: _multimodal_quick_action(media_id, "hidden"), inputs=selected_mm_media_id, outputs=[*mm_detail_outputs, mm_detail_status])
+            mm_not_searchable.click(lambda media_id: _multimodal_quick_action(media_id, "not_searchable"), inputs=selected_mm_media_id, outputs=[*mm_detail_outputs, mm_detail_status])
+            mm_not_event_usable.click(lambda media_id: _multimodal_quick_action(media_id, "not_event_usable"), inputs=selected_mm_media_id, outputs=[*mm_detail_outputs, mm_detail_status])
+
+        with gr.Tab("Report Viewer"):
+            with gr.Row():
+                report_from = gr.Textbox(label="from", placeholder="YYYY-MM-DD")
+                report_to = gr.Textbox(label="to", placeholder="YYYY-MM-DD")
+                report_mode = gr.Dropdown(label="mode", choices=["public", "private"], value="public")
+                report_examples = gr.Checkbox(label="include examples", value=False)
+                report_save_json = gr.Checkbox(label="save JSON", value=True)
+            with gr.Row():
+                report_refresh = gr.Button("レポート一覧を更新")
+                report_generate = gr.Button("generate-report")
+            initial_reports = list_reports_for_ui()
+            report_choice = gr.Dropdown(
+                label="reports/*.md",
+                choices=initial_reports,
+                value=initial_reports[0] if initial_reports else None,
+            )
+            report_load = gr.Button("選択レポートを読み込む")
+            report_path_box = gr.Textbox(label="generated / loaded report path", interactive=False)
+            report_markdown = gr.Markdown(label="Markdown preview")
+            report_json = gr.Textbox(label="JSON summary", lines=10, interactive=False)
+            report_refresh.click(_report_choices, outputs=report_choice)
+            report_load.click(_load_report_ui, inputs=report_choice, outputs=[report_markdown, report_json, report_path_box])
+            report_generate.click(
+                _generate_report_ui,
+                inputs=[report_from, report_to, report_mode, report_examples, report_save_json],
+                outputs=[report_choice, report_markdown, report_json, report_path_box],
             )
 
         with gr.Tab("VLM Review / 画像解析レビュー"):
             gr.Markdown("画像解析による推定を確認し、検索・イベント生成に使うかを管理します。")
             with gr.Row():
+                vlmr_month = gr.Textbox(label="month", placeholder="YYYY-MM")
                 vlmr_date = gr.Textbox(label="date", placeholder="YYYY-MM-DD")
                 vlmr_from = gr.Textbox(label="date_from", placeholder="YYYY-MM-DD")
                 vlmr_to = gr.Textbox(label="date_to", placeholder="YYYY-MM-DD")
@@ -792,6 +979,13 @@ def create_app(db_path: str | Path | None = None):
             with gr.Row():
                 vlmr_unreviewed = gr.Checkbox(label="unreviewed only", value=False)
                 vlmr_safety = gr.Checkbox(label="safety_flagsあり", value=False)
+                vlmr_food = gr.Checkbox(label="food_cuesあり", value=False)
+                vlmr_performance = gr.Checkbox(label="performance/stageあり", value=False)
+            with gr.Row():
+                vlmr_has_ocr = gr.Checkbox(label="OCRあり", value=False)
+                vlmr_has_embedding = gr.Checkbox(label="embeddingあり", value=False)
+                vlmr_event_linked = gr.Checkbox(label="event linked", value=False)
+                vlmr_failed = gr.Checkbox(label="failed", value=False)
                 vlmr_low_conf = gr.Number(label="confidence <=", value=None)
                 vlmr_limit = gr.Number(label="limit", value=100, precision=0)
             load_vlm_review_button = gr.Button("VLM Review Queue 読み込み")
@@ -815,6 +1009,7 @@ def create_app(db_path: str | Path | None = None):
                     "wrong",
                     "searchable",
                     "event_usable",
+                    "status",
                 ],
                 label="VLM review queue",
                 interactive=False,
@@ -891,7 +1086,23 @@ def create_app(db_path: str | Path | None = None):
             ]
             load_vlm_review_button.click(
                 _load_vlm_review_queue,
-                inputs=[vlmr_date, vlmr_from, vlmr_to, vlmr_status, vlmr_unreviewed, vlmr_safety, vlmr_low_conf, vlmr_limit],
+                inputs=[
+                    vlmr_month,
+                    vlmr_date,
+                    vlmr_from,
+                    vlmr_to,
+                    vlmr_status,
+                    vlmr_unreviewed,
+                    vlmr_safety,
+                    vlmr_food,
+                    vlmr_performance,
+                    vlmr_has_ocr,
+                    vlmr_has_embedding,
+                    vlmr_event_linked,
+                    vlmr_failed,
+                    vlmr_low_conf,
+                    vlmr_limit,
+                ],
                 outputs=[vlmr_summary, vlmr_table, selected_vlm_media_id, *vlm_detail_outputs],
             )
             selected_vlm_media_id.change(_vlm_detail_values, inputs=selected_vlm_media_id, outputs=vlm_detail_outputs)
@@ -1296,6 +1507,24 @@ def _tags_text(value: Any) -> str:
 def _blank_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _month_or_dates(month_text: str, from_text: str, to_text: str) -> tuple[str | None, str | None]:
+    month = _blank_or_none(month_text)
+    if month and len(month) == 7 and month[4] == "-":
+        year_text, month_value = month.split("-", 1)
+        first = date(int(year_text), int(month_value), 1)
+        if first.month == 12:
+            next_month = date(first.year + 1, 1, 1)
+        else:
+            next_month = date(first.year, first.month + 1, 1)
+        return first.isoformat(), (next_month - timedelta(days=1)).isoformat()
+    return _blank_or_none(from_text), _blank_or_none(to_text)
+
+
+def _contains_any(row: dict[str, Any], needles: tuple[str, ...]) -> bool:
+    haystack = " ".join(str(value or "") for value in row.values()).lower()
+    return any(needle.lower() in haystack for needle in needles)
 
 
 def _int_or_none(value: Any) -> int | None:

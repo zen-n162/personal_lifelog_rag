@@ -27,7 +27,7 @@ def test_private_eval_vlm_quality_and_image_search_cases(tmp_path: Path) -> None
                 question="ラーメン",
                 query="ラーメン",
                 case_type="image_search",
-                expected_dates=["2024-12-24"],
+                expected_top_dates_any=["2024-12-07", "2024-12-24"],
                 expected_min_results=1,
                 expected_evidence_types=["vlm"],
             ),
@@ -37,6 +37,7 @@ def test_private_eval_vlm_quality_and_image_search_cases(tmp_path: Path) -> None
     assert report["summary"]["passed"] == 2
     assert report["case_results"][0]["vlm_success_count"] == 1
     assert report["case_results"][1]["results_count"] == 1
+    assert report["case_results"][1]["matched_dates"] == ["2024-12-24"]
 
 
 def _seed_vlm_eval_record(repository: LifelogRepository) -> None:

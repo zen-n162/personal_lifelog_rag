@@ -104,7 +104,7 @@ def run_ocr_images(
         report.processed += 1
         if result.status == "success":
             report.success += 1
-        elif result.status == "no_text":
+        elif _is_no_text_status(result.status):
             report.no_text += 1
         elif result.status == "engine_unavailable":
             report.engine_unavailable += 1
@@ -119,6 +119,7 @@ def ocr_stats(repository, *, start_date: str | None = None, end_date: str | None
     rows = repository.list_media_ocr(start_date=start_date, end_date=end_date, limit=1_000_000)
     status_counts: dict[str, int] = {}
     engine_counts: dict[str, int] = {}
+    language_counts: dict[str, int] = {}
     daily_success: dict[str, int] = {}
     text_lengths: list[int] = []
     success_media_ids: set[str] = set()
@@ -127,6 +128,10 @@ def ocr_stats(repository, *, start_date: str | None = None, end_date: str | None
         engine = str(row.get("ocr_engine") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
         engine_counts[engine] = engine_counts.get(engine, 0) + 1
+        for lang in str(row.get("ocr_languages") or "").split("+"):
+            lang = lang.strip()
+            if lang:
+                language_counts[lang] = language_counts.get(lang, 0) + 1
         text = str(row.get("ocr_text") or "")
         if text:
             text_lengths.append(len(text))
@@ -147,8 +152,10 @@ def ocr_stats(repository, *, start_date: str | None = None, end_date: str | None
         "ocr_done_photos": len(rows),
         "status_counts": dict(sorted(status_counts.items())),
         "engine_counts": dict(sorted(engine_counts.items())),
+        "language_counts": dict(sorted(language_counts.items())),
         "text_present_count": len(text_lengths),
         "average_text_length": round(sum(text_lengths) / len(text_lengths), 2) if text_lengths else 0.0,
+        "text_length_distribution": _text_length_distribution(text_lengths),
         "daily_success_counts": dict(sorted(daily_success.items())),
         "ocr_event_count": ocr_event_count,
     }
@@ -161,7 +168,7 @@ def format_ocr_report(report: OcrImagesReport) -> str:
             f"- selected images: {report.selected_images}",
             f"- processed: {report.processed}",
             f"- success: {report.success}",
-            f"- no_text: {report.no_text}",
+            f"- no_text_detected: {report.no_text}",
             f"- failed: {report.failed}",
             f"- skipped: {report.skipped}",
             f"- engine_unavailable: {report.engine_unavailable}",
@@ -185,12 +192,16 @@ def format_ocr_stats(report: dict[str, Any]) -> str:
     lines.extend(_counts(report["status_counts"]))
     lines.append("engine counts:")
     lines.extend(_counts(report["engine_counts"]))
+    lines.append("language counts:")
+    lines.extend(_counts(report.get("language_counts", {})))
+    lines.append("text length distribution:")
+    lines.extend(_counts(report.get("text_length_distribution", {})))
     lines.append("daily success counts:")
     lines.extend(_counts(report["daily_success_counts"]))
     return "\n".join(lines)
 
 
-def format_ocr_show(rows: list[dict[str, Any]], *, full: bool = False) -> str:
+def format_ocr_show(rows: list[dict[str, Any]], *, full: bool = False, show_errors: bool = False) -> str:
     if not rows:
         return "OCR records: none"
     lines = [f"OCR records: {len(rows)}"]
@@ -209,6 +220,8 @@ def format_ocr_show(rows: list[dict[str, Any]], *, full: bool = False) -> str:
                 f"  text: {preview}",
             ]
         )
+        if show_errors:
+            lines.append(f"  error_message: {redact_text(row.get('error_message'), max_chars=400)}")
     return "\n".join(lines)
 
 
@@ -259,3 +272,21 @@ def _counts(counts: dict[str, int]) -> list[str]:
     if not counts:
         return ["- none"]
     return [f"- {key}: {value}" for key, value in counts.items()]
+
+
+def _is_no_text_status(status: str) -> bool:
+    return status in {"no_text", "no_text_detected"}
+
+
+def _text_length_distribution(lengths: list[int]) -> dict[str, int]:
+    buckets = {"0-80": 0, "81-400": 0, "401-1200": 0, "1201+": 0}
+    for length in lengths:
+        if length <= 80:
+            buckets["0-80"] += 1
+        elif length <= 400:
+            buckets["81-400"] += 1
+        elif length <= 1200:
+            buckets["401-1200"] += 1
+        else:
+            buckets["1201+"] += 1
+    return buckets

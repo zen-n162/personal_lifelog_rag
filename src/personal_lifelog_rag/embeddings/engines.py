@@ -17,6 +17,9 @@ from personal_lifelog_rag.embeddings.schemas import EmbeddingResult
 from personal_lifelog_rag.embeddings.similarity import normalize
 
 
+_ENGINE_CACHE: dict[tuple[Any, ...], MultimodalEmbeddingEngine] = {}
+
+
 @dataclass
 class NoopEmbeddingEngine:
     name: str = "noop"
@@ -436,6 +439,66 @@ def get_multimodal_embedding_engine(
             name="qwen3_vl_embedding_sentence_transformers",
         )
     return NoopEmbeddingEngine(model_name=model_name)
+
+
+def get_cached_multimodal_embedding_engine(
+    engine_name: str | None = None,
+    *,
+    model_name: str | None = None,
+    model_path: str | None = None,
+    device: str | None = "auto",
+    dtype: str | None = "auto",
+    local_files_only: bool | None = True,
+    embedding_dim: int | None = None,
+    batch_size: int | None = None,
+) -> MultimodalEmbeddingEngine:
+    """Return a same-process cached embedding engine for heavyweight runtimes.
+
+    Creating the engine object is cheap, but the first query embedding can load
+    large local weights. Keeping the object stable lets batch QA and private eval
+    reuse the already-loaded runtime without changing the single-query CLI path.
+    """
+
+    resolved = (engine_name or "noop").strip().lower()
+    if resolved in {"", "noop", "none", "disabled", "off", "fake"}:
+        return get_multimodal_embedding_engine(
+            engine_name,
+            model_name=model_name,
+            model_path=model_path,
+            device=device,
+            dtype=dtype,
+            local_files_only=local_files_only,
+            embedding_dim=embedding_dim,
+            batch_size=batch_size,
+        )
+    key = (
+        resolved,
+        model_name,
+        str(Path(model_path).expanduser()) if model_path else None,
+        device,
+        dtype,
+        local_files_only,
+        embedding_dim,
+        batch_size,
+    )
+    if key not in _ENGINE_CACHE:
+        _ENGINE_CACHE[key] = get_multimodal_embedding_engine(
+            engine_name,
+            model_name=model_name,
+            model_path=model_path,
+            device=device,
+            dtype=dtype,
+            local_files_only=local_files_only,
+            embedding_dim=embedding_dim,
+            batch_size=batch_size,
+        )
+    return _ENGINE_CACHE[key]
+
+
+def clear_multimodal_embedding_engine_cache() -> None:
+    """Clear cached engines. Intended for tests and explicit maintenance."""
+
+    _ENGINE_CACHE.clear()
 
 
 def infer_query_engine_from_records(rows: list[dict]) -> MultimodalEmbeddingEngine:

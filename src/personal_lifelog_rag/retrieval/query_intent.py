@@ -28,6 +28,7 @@ QueryIntent = Literal[
     "food_photo_search",
     "place_photo_search",
     "event_summary",
+    "monthly_summary",
     "time_range_summary",
     "location_summary",
     "unknown",
@@ -48,6 +49,7 @@ VALID_QUERY_INTENTS = {
     "food_photo_search",
     "place_photo_search",
     "event_summary",
+    "monthly_summary",
     "time_range_summary",
     "location_summary",
     "unknown",
@@ -61,6 +63,17 @@ MENTION_HINTS = ("アルバム", "写真送って", "話題", "言ってた")
 DATE_QA_HINTS = ("何して", "何があった", "なにして", "この日")
 TIME_RANGE_HINTS = ("去年", "今年", "今月", "先月", "最近", "この1か月", "この一か月")
 PHOTO_ACTIVITY_HINTS = ("写真が多", "写真を撮", "撮った日", "GPS付き写真", "写真ある")
+IMAGE_SEARCH_PATTERNS = (
+    "っぽい写真",
+    "の写真",
+    "が写っている写真",
+    "写っている写真",
+    "みたいな写真",
+    "らしい写真",
+    "を撮った日",
+    "の画像を探して",
+    "画像を探して",
+)
 LOCATION_SUMMARY_HINTS = ("よく行った場所", "行った場所", "場所をまとめ", "場所まとめ")
 PERSON_ACTIVITY_HINTS = ("会った", "出かけた", "会う")
 
@@ -125,6 +138,10 @@ def classify_query_intent(
         reasons.append("日付と「何して」系の表現を検出")
         return _result("date_qa", 0.92, normalized, entities, "ask", reasons)
 
+    if has_range and _is_calendar_month_range(entities) and any(hint in normalized for hint in DATE_QA_HINTS):
+        reasons.append("月単位の期間と「何して」系の表現を検出")
+        return _result("monthly_summary", 0.88, normalized, entities, "monthly_summary", reasons)
+
     if has_range and (is_summary_query(normalized) or any(hint in normalized for hint in DATE_QA_HINTS)):
         reasons.append("期間とsummary/何して系の表現を検出")
         return _result("time_range_summary", 0.86, normalized, entities, "event_summary", reasons)
@@ -132,6 +149,13 @@ def classify_query_intent(
     if any(hint in normalized for hint in LOCATION_SUMMARY_HINTS):
         reasons.append("場所の集計・要約表現を検出")
         return _result("location_summary", 0.78, normalized, entities, "event_summary", reasons)
+
+    if _looks_like_visual_content_query(normalized):
+        reasons.append("写真・画像内容を探す表現を検出")
+        entities.setdefault("activity", "photo")
+        if entities.get("raw_terms"):
+            entities.setdefault("topic", str(entities["raw_terms"][0]))
+        return _result("multimodal_image_search", 0.86, normalized, entities, "multimodal-search", reasons)
 
     if any(hint in normalized for hint in PHOTO_ACTIVITY_HINTS) or (
         any(term in normalized for term in PHOTO_TERMS) and any(word in normalized for word in ("多", "撮", "ある"))
@@ -190,3 +214,28 @@ def _result(
         routing_hint=routing_hint,
         reasons=reasons,
     )
+
+
+def _looks_like_visual_content_query(query: str) -> bool:
+    if any(pattern in query for pattern in IMAGE_SEARCH_PATTERNS):
+        return True
+    return any(term in query for term in ("写真", "画像")) and any(
+        hint in query for hint in ("いつ", "探して", "写って", "っぽ", "みたい", "らしい")
+    )
+
+
+def _is_calendar_month_range(entities: dict[str, Any]) -> bool:
+    start = str(entities.get("date_from") or "")
+    end = str(entities.get("date_to") or "")
+    if len(start) != 10 or len(end) != 10:
+        return False
+    try:
+        year = int(start[:4])
+        month = int(start[5:7])
+    except ValueError:
+        return False
+    if start != f"{year:04d}-{month:02d}-01":
+        return False
+    import calendar
+
+    return end == f"{year:04d}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"

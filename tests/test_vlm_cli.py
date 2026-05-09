@@ -241,6 +241,39 @@ models:
     assert row["prompt_version"] == "lifelog_structured_tags_v1"
 
 
+def test_retry_vlm_failed_reprocesses_failed_rows_only(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    repository = LifelogRepository(db_path)
+    repository.upsert_media_vlm(
+        media_id="media_vlm_cli",
+        status="failed",
+        vlm_engine="qwen3_vl_transformers",
+        model_name="local-qwen",
+        error_message="Qwen3-VL JSON parse failed",
+    )
+
+    code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "retry-vlm-failed",
+            "--date",
+            "2024-12-24",
+            "--engine",
+            "fake",
+            "--allow-fake-write",
+            "--rerun-model",
+            "--limit",
+            "5",
+        ]
+    )
+    row = LifelogRepository(db_path).get_media_vlm("media_vlm_cli")
+
+    assert code == 0
+    assert row["status"] == "success"
+    assert row["vlm_engine"] == "fake"
+
+
 def _seed_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "lifelog.sqlite"
     repository = LifelogRepository(db_path)

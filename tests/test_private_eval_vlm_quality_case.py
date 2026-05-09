@@ -68,7 +68,76 @@ cases:
     assert any("disallowed VLM safety flags" in issue for issue in case["issues"])
 
 
-def _add_vlm_media(repository: LifelogRepository, media_id: str, *, caption: str, flags: list[str]) -> None:
+def test_vlm_quality_allows_bounded_failed_rows_and_allowed_json_parse_flag(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    _add_vlm_media(repository, "media_vlm_quality_success", caption="Stage possible", flags=["people_present"])
+    _add_vlm_media(
+        repository,
+        "media_vlm_quality_failed",
+        caption="",
+        flags=["json_parse_failed"],
+        status="failed",
+    )
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text(
+        """
+cases:
+  - id: vlm_quality_failed_allowed
+    type: vlm_quality
+    date: "2024-12-24"
+    expected_min_vlm_success: 1
+    max_failed_vlm_rows: 1
+    allowed_safety_flags:
+      - "people_present"
+      - "json_parse_failed"
+""",
+        encoding="utf-8",
+    )
+
+    report = evaluate_private_questions(repository, load_private_eval_questions(questions_path))
+
+    case = report["case_results"][0]
+    assert case["status"] == "pass"
+    assert case["failed_vlm_rows"] == 1
+    assert case["max_failed_vlm_rows"] == 1
+
+
+def test_vlm_quality_accepts_date_range(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    _add_vlm_media(repository, "media_vlm_quality_range", caption="Meal possible", flags=["people_present"])
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text(
+        """
+cases:
+  - id: vlm_quality_range
+    type: vlm_quality
+    date_from: "2024-12-01"
+    date_to: "2024-12-31"
+    expected_min_vlm_success: 1
+    allowed_safety_flags:
+      - "people_present"
+""",
+        encoding="utf-8",
+    )
+
+    report = evaluate_private_questions(repository, load_private_eval_questions(questions_path))
+
+    case = report["case_results"][0]
+    assert case["status"] == "pass"
+    assert case["date_from"] == "2024-12-01"
+    assert case["date_to"] == "2024-12-31"
+
+
+def _add_vlm_media(
+    repository: LifelogRepository,
+    media_id: str,
+    *,
+    caption: str,
+    flags: list[str],
+    status: str = "success",
+) -> None:
     repository.add_media_item(
         id=media_id,
         file_path=f"/local/private/{media_id}.jpg",
@@ -80,7 +149,7 @@ def _add_vlm_media(repository: LifelogRepository, media_id: str, *, caption: str
         media_id=media_id,
         caption=caption,
         short_caption=caption[:24],
-        status="success",
+        status=status,
         vlm_engine="qwen3_vl_transformers",
         safety_flags=flags,
     )

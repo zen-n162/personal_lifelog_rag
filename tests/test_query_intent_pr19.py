@@ -53,9 +53,18 @@ def test_classify_time_range_summary() -> None:
 def test_classify_relative_month_with_injected_today() -> None:
     result = classify_query_intent("去年12月は何してた？", today=date(2026, 5, 9))
 
-    assert result.intent in {"time_range_summary", "date_qa"}
+    assert result.intent in {"monthly_summary", "time_range_summary", "date_qa"}
     assert result.entities["date_from"] == "2025-12-01"
     assert result.entities["date_to"] == "2025-12-31"
+
+
+def test_classify_monthly_what_did_i_do_summary() -> None:
+    result = classify_query_intent("2025年1月は何していた？")
+
+    assert result.intent == "monthly_summary"
+    assert result.routing_hint == "monthly_summary"
+    assert result.entities["date_from"] == "2025-01-01"
+    assert result.entities["date_to"] == "2025-01-31"
 
 
 def test_classify_unknown_does_not_crash() -> None:
@@ -63,3 +72,15 @@ def test_classify_unknown_does_not_crash() -> None:
 
     assert result.intent == "unknown"
     assert result.routing_hint == "unsupported"
+
+
+def test_classify_visual_content_photo_queries_as_multimodal_image_search() -> None:
+    for query in (
+        "パフォーマンスっぽい写真はいつ？",
+        "ステージの写真はいつ？",
+        "ダンスの写真はいつ？",
+    ):
+        result = classify_query_intent(query)
+
+        assert result.intent == "multimodal_image_search"
+        assert result.routing_hint == "multimodal-search"

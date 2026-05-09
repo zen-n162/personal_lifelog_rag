@@ -23,3 +23,26 @@ def test_visual_query_expands_place_cafe_and_car_terms() -> None:
     assert "urban" in shinjuku_terms
     assert "vehicle_interior_possible" in car_terms
     assert "headrest" in car_terms
+
+
+def test_visual_query_expands_performance_stage_and_dance_terms() -> None:
+    performance_terms = expand_visual_query_terms("パフォーマンスっぽい写真")
+    stage_terms = expand_visual_query_terms("ステージの写真")
+    dance_terms = expand_visual_query_terms("ダンスの写真")
+
+    assert "performance_possible" in performance_terms
+    assert "performing_possible" in performance_terms
+    assert "stage_possible" in stage_terms
+    assert "performance_venue_possible" in stage_terms
+    assert "dancing_possible" in dance_terms
+
+
+def test_visual_query_expands_ocr_document_terms() -> None:
+    receipt_terms = expand_visual_query_terms("レシートの写真")
+    menu_terms = expand_visual_query_terms("メニューが写っている写真")
+    sign_terms = expand_visual_query_terms("看板に書いてある写真")
+
+    assert "receipt" in receipt_terms
+    assert "ocr_text" in receipt_terms
+    assert "restaurant_menu" in menu_terms
+    assert "signboard" in sign_terms

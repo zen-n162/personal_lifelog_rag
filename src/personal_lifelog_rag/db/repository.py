@@ -742,6 +742,11 @@ class LifelogRepository:
                     "UPDATE media_items SET ocr_text = ? WHERE id = ?",
                     (ocr_text, media_id),
                 )
+            else:
+                connection.execute(
+                    "UPDATE media_items SET ocr_text = NULL WHERE id = ?",
+                    (media_id,),
+                )
             connection.commit()
 
     def get_media_ocr(self, media_id: str) -> dict[str, Any] | None:
@@ -1846,6 +1851,7 @@ def _search_media_ocr_query(
             term_clauses.append(f"COALESCE({column}, '') LIKE ?")
             params.append(f"%{term}%")
     clauses.append("(" + " OR ".join(term_clauses) + ")")
+    clauses.append("media_ocr.status = 'success'")
     timestamp = "COALESCE(media_items.captured_at, media_items.fallback_captured_at)"
     if start_date is not None:
         clauses.append(f"substr({timestamp}, 1, 10) >= ?")

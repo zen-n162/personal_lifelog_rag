@@ -359,7 +359,15 @@ def _line_message_checks(connection) -> dict[str, Any]:
 
 
 def _media_ocr_checks(connection) -> dict[str, Any]:
-    valid_statuses = ("pending", "success", "skipped", "failed", "no_text", "engine_unavailable")
+    valid_statuses = (
+        "pending",
+        "success",
+        "skipped",
+        "failed",
+        "no_text",
+        "no_text_detected",
+        "engine_unavailable",
+    )
     placeholders = ", ".join("?" for _ in valid_statuses)
     return {
         "total": _count(connection, "SELECT COUNT(*) FROM media_ocr"),

@@ -56,7 +56,7 @@ def test_ocr_stats_json_and_show(tmp_path: Path, capsys) -> None:
 
     stats_code = main(["--db-path", str(db_path), "ocr-stats", "--json"])
     payload = json.loads(capsys.readouterr().out)
-    show_code = main(["--db-path", str(db_path), "ocr-show", "media_cli"])
+    show_code = main(["--db-path", str(db_path), "ocr-show", "media_cli", "--show-errors"])
     show_output = capsys.readouterr().out
 
     assert stats_code == 0
@@ -64,6 +64,35 @@ def test_ocr_stats_json_and_show(tmp_path: Path, capsys) -> None:
     assert show_code == 0
     assert "media_cli" in show_output
     assert "新宿" in show_output
+    assert "error_message:" in show_output
+
+
+def test_ocr_diagnostics_and_search_cli(tmp_path: Path, capsys) -> None:
+    db_path = _seed_db(tmp_path)
+    config_path = tmp_path / "model_runtime.yaml"
+    config_path.write_text(
+        """
+ocr:
+  engine: "tesseract_cli"
+  languages: "jpn+eng"
+  tesseract_cmd: "definitely_missing_tesseract_for_test"
+  local_only: true
+""",
+        encoding="utf-8",
+    )
+    main(["--db-path", str(db_path), "ocr-images", "--date", "2024-12-24", "--engine", "fake"])
+    capsys.readouterr()
+
+    diag_code = main(["ocr-diagnostics", "--config", str(config_path), "--json"])
+    diag_payload = json.loads(capsys.readouterr().out)
+    search_code = main(["--db-path", str(db_path), "ocr-search", "新宿", "--json"])
+    search_payload = json.loads(capsys.readouterr().out)
+
+    assert diag_code == 0
+    assert diag_payload["selected_engine"] == "tesseract_cli"
+    assert diag_payload["local_only"] is True
+    assert search_code == 0
+    assert search_payload["results"][0]["media_id"] == "media_cli"
 
 
 def _seed_db(tmp_path: Path) -> Path:

@@ -2,10 +2,101 @@
 
 Local-first personal lifelog search and question-answering application.
 
-The MVP ingests locally exported photos and LINE chat history text files,
-stores them in SQLite, and answers simple date-based questions with extractive
-evidence. It is built for private personal data: photos, timestamps, locations,
-and chat text should stay on the local machine.
+This project ingests locally exported photos and LINE chat history text files,
+stores them in SQLite, adds local OCR/VLM/embedding analysis, builds
+evidence-linked events, and answers natural-language questions over personal
+memory data. It is built for private personal data: photos, timestamps,
+locations, call records, and chat text should stay on the local machine.
+
+## Project Overview
+
+`personal_lifelog_rag` is a privacy-preserving multimodal RAG app for personal
+lifelogs. It combines:
+
+- photo EXIF/GPS metadata
+- LINE messages and call-like records
+- local OCR
+- Qwen3-VL image captions and tags
+- Qwen3-VL-Embedding image/text retrieval
+- SQLite event and evidence tables
+- local QA, image search, monthly summaries, private eval, reports, and review UI
+
+Portfolio summary:
+
+> A local-first multimodal RAG application that integrates personal photos, chat
+> exports, location metadata, OCR, and local vision models so past events can be
+> searched in natural language without external APIs.
+
+## Features
+
+- Date QA: `qa "2024年12月24日は何していた？"`
+- Image-search QA: `qa "ご飯を食べた写真はいつ？"`
+- Place QA: `qa "新宿に行ったのはいつ？"`
+- Monthly summary: `qa "2025年1月は何していた？"`
+- Multimodal search over VLM, embeddings, OCR, LINE, events, and places
+- VLM Review UI for accepted/rejected/wrong/hidden/not-searchable controls
+- Private eval and eval comparison
+- Public/private Markdown report generation
+- Month-by-month rollout planning for later analysis expansion
+
+## Quick Start
+
+```bash
+cd ~/MyApplication/personal_lifelog_rag
+conda activate personal_lifelog_rag
+python -m personal_lifelog_rag.app.cli db-check --strict
+python -m personal_lifelog_rag.app.cli qa "2025年1月は何していた？"
+python -m personal_lifelog_rag.app.cli ui
+```
+
+The UI binds to `127.0.0.1` and does not enable Gradio sharing.
+
+## Local Model Setup
+
+Local model runtime is configured outside Git. The current intended roles are:
+
+- Qwen3-VL: caption, tags, visual cues, safety flags
+- Qwen3-VL-Embedding: image embeddings, combined-text embeddings, query retrieval
+
+The app must not auto-download models. Use local model paths and
+`local_files_only` in private runtime config.
+
+## Key Commands
+
+```bash
+python -m personal_lifelog_rag.app.cli qa "ご飯を食べた写真はいつ？"
+python -m personal_lifelog_rag.app.cli multimodal-search "ステージの写真" --backend hybrid
+python -m personal_lifelog_rag.app.cli generate-report --public --save-json
+python -m personal_lifelog_rag.app.cli month-plan --month 2025-02
+python -m personal_lifelog_rag.app.cli month-run --month 2025-02 --limit 100 --dry-run
+```
+
+## Privacy Notice
+
+Do not publish real photos, raw chat exports, exact GPS coordinates, model
+runtime config, local databases, backups, private eval files, generated private
+reports, or screenshots containing private evidence. Public demos should use
+aggregate metrics, anonymized examples, and public report mode.
+
+## Portfolio Docs
+
+- [Portfolio Summary](docs/portfolio_summary.md)
+- [System Architecture](docs/system_architecture.md)
+- [Demo Scenarios](docs/demo_scenarios.md)
+- [Privacy and Safety](docs/privacy_and_safety.md)
+- [Evaluation Summary](docs/evaluation_summary.md)
+- [Roadmap](docs/roadmap.md)
+
+## Portfolio Note
+
+This project is useful to discuss as an AI/ML portfolio project because it
+shows end-to-end local multimodal engineering: ingestion, model adaptation,
+retrieval, safety filtering, human review, evaluation, and reporting.
+
+## Publication Warning
+
+Before sharing any generated report or UI screenshot, manually inspect it for
+raw messages, names, exact locations, image paths, and other private details.
 
 ## Privacy Policy
 
@@ -53,8 +144,11 @@ variables; no cloud image analysis is used. See `docs/ocr_setup.md` and
 separation and benchmark workflow. See `docs/vlm_prompting_and_safety.md` for
 Qwen3-VL prompt templates, safety filtering, and evidence-strength rules. See
 `docs/reporting.md` for privacy-preserving Markdown report export. See
+`docs/ui_usage.md` for Monthly Summary, Multimodal Search, VLM Review, and
+Report Viewer operation. See
 `docs/private_eval_20241224.md` for creating a local baseline private eval suite
-around an inspected date.
+around an inspected date. See `docs/monthly_rollout.md` for month-by-month
+rollout planning from 2025-02 onward.
 
 ## Directory Layout
 
@@ -189,15 +283,18 @@ Run local OCR over imported photos:
 python -m personal_lifelog_rag.app.cli ocr-images --date 2024-12-24 --dry-run --limit 10
 python -m personal_lifelog_rag.app.cli ocr-images --date 2024-12-24 --limit 10 --skip-existing
 python -m personal_lifelog_rag.app.cli ocr-images --from 2024-12-01 --to 2024-12-31 --engine tesseract_cli
+python -m personal_lifelog_rag.app.cli ocr-diagnostics --config private_config/model_runtime.yaml
 python -m personal_lifelog_rag.app.cli ocr-stats
 python -m personal_lifelog_rag.app.cli ocr-show --date 2024-12-24 --limit 10
+python -m personal_lifelog_rag.app.cli ocr-search "新宿"
 ```
 
 OCR is optional. If Tesseract or another local OCR engine is not available,
 `ocr-images` records `engine_unavailable` and existing search, ask, event, and
 UI functions keep working. Search uses `media_ocr` evidence when present, but
 CLI/UI previews redact and shorten OCR text because it can contain addresses,
-phone numbers, emails, or other private text. See `docs/ocr_setup.md`.
+phone numbers, emails, or other private text. See `docs/ocr_setup.md` and
+`docs/ocr_engine.md`.
 
 Build local timeline events from LINE, photos, GPS, caption, and OCR evidence:
 
@@ -537,6 +634,9 @@ Tesseract OCR:
 pip install -e ".[ocr]"
 python -m personal_lifelog_rag.app.cli ocr-images --date 2024-12-24 --engine tesseract_cli --languages jpn+eng
 ```
+
+See `docs/ocr_engine.md` for local Tesseract diagnostics, `ocr-search`, and
+redaction behavior.
 
 PaddleOCR:
 

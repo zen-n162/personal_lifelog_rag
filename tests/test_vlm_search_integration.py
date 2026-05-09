@@ -28,9 +28,10 @@ def test_qa_food_photo_query_routes_to_specific_food_term_and_vlm_evidence(tmp_p
 
     result = route_query(repository, "ラーメンを食べた写真はいつ？", limit=5)
 
-    assert result.intent == "food_activity"
+    assert result.intent == "multimodal_image_search"
+    assert result.routing == "multimodal-search"
     assert result.results[0]["date"] == "2024-12-24"
-    assert "VLM evidence" in result.answer
+    assert "画像解析では" in result.answer
 
 
 def _seed_vlm_record(repository: LifelogRepository) -> None:

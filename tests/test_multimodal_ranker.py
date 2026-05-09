@@ -38,6 +38,38 @@ def test_score_uses_embedding_vlm_ocr_line_event_components() -> None:
     assert components["final_score"] > 0.45
 
 
+def test_visual_mismatch_caps_line_and_event_boosts() -> None:
+    terms = expand_visual_query_terms("ダンスの写真")
+    components = score_multimodal_components(
+        {"caption": "Black-and-white photo collage of children"},
+        expanded_terms=terms,
+        embedding_score=0.27,
+        related_event={"title": "食事・カフェの可能性", "summary": "同日イベント", "confidence": 0.95},
+        line_matches=[{"text": "ダンスの話"} for _ in range(5)],
+    )
+
+    assert components["visual_match"] == 0.0
+    assert components["line_score"] <= 0.2
+    assert components["event_score"] <= 0.2
+    assert components["final_score"] < 0.3
+
+
+def test_visual_match_allows_context_boosts() -> None:
+    terms = expand_visual_query_terms("ダンスの写真")
+    components = score_multimodal_components(
+        {"activity_tags_json": '["dancing_possible"]'},
+        expanded_terms=terms,
+        embedding_score=0.2,
+        related_event={"title": "写真撮影の記録", "summary": "同日イベント", "confidence": 0.8},
+        line_matches=[{"text": "ダンスの話"}],
+    )
+
+    assert components["visual_match"] == 1.0
+    assert components["line_score"] > 0.2
+    assert components["event_score"] > 0.2
+    assert components["final_score"] > 0.2
+
+
 def test_evidence_strength_rules_for_pr35() -> None:
     assert compute_evidence_strength(["photo", "vlm"]) == "weak"
     assert compute_evidence_strength(["photo", "embedding"]) == "weak"

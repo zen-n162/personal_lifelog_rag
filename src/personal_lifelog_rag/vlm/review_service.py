@@ -281,6 +281,7 @@ def review_rows_for_dataframe(rows: list[dict[str, Any]]) -> list[list[Any]]:
             row.get("is_wrong"),
             row.get("is_searchable"),
             row.get("is_event_usable"),
+            row.get("status") or "",
         ]
         for row in rows
     ]
@@ -314,6 +315,7 @@ def _review_item(row: dict[str, Any], *, has_embedding: bool, event_linked: bool
         "is_event_usable": int(row.get("is_event_usable") if row.get("is_event_usable") is not None else 1),
         "has_embedding": has_embedding,
         "event_linked": event_linked,
+        "status": row.get("status") or "",
     }
 
 

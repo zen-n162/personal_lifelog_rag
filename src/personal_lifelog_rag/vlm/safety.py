@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from personal_lifelog_rag.retrieval.vlm_evidence import compute_vlm_evidence_strength
+from personal_lifelog_rag.vlm.json_repair import parse_json_object_with_repair
 from personal_lifelog_rag.vlm.schemas import VlmResult
 
 
@@ -149,7 +150,8 @@ def result_from_payload(payload: dict[str, Any], *, engine: str, model_name: str
         people_count=_int_or_none(payload.get("people_count")),
         contains_text_hint=_bool_or_none(payload.get("contains_text_hint")),
         uncertainty_notes=_string_list(payload.get("uncertainty_notes")),
-        safety_flags=_string_list(payload.get("safety_flags")),
+        safety_flags=_string_list(payload.get("safety_flags"))
+        + (["json_repaired"] if payload.get("_json_repaired") else []),
         engine=engine,
         model_name=model_name,
         prompt_version=prompt_version,
@@ -161,19 +163,14 @@ def result_from_payload(payload: dict[str, Any], *, engine: str, model_name: str
 
 
 def safe_json_object(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if not stripped:
-        return {"_parse_error": "empty_output"}
-    for candidate in (stripped, _extract_json_object(stripped)):
-        if not candidate:
-            continue
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    return {"_parse_error": "invalid_json"}
+    result = parse_json_object_with_repair(text)
+    if result.payload is None:
+        return {"_parse_error": "empty_output" if not str(text or "").strip() else "invalid_json"}
+    payload = dict(result.payload)
+    if result.repaired:
+        payload["_json_repaired"] = True
+        payload["_json_repair_notes"] = result.notes
+    return payload
 
 
 def safety_check_text(text: str) -> dict[str, Any]:

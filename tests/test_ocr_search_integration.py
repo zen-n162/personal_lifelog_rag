@@ -44,6 +44,61 @@ def test_private_eval_ocr_quality_case_can_pass(tmp_path: Path) -> None:
     assert report["case_results"][0]["ocr_success_count"] == 1
 
 
+def test_private_eval_ocr_quality_allows_engine_unavailable_when_configured(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    _seed_ocr_record(repository)
+    repository.upsert_media_ocr(
+        media_id="media_ocr_search",
+        ocr_text=None,
+        ocr_engine="tesseract_cli",
+        ocr_languages=["jpn"],
+        status="engine_unavailable",
+        error_message="missing tesseract",
+        analysis_version="test",
+    )
+
+    report = evaluate_private_questions(
+        repository,
+        [
+            PrivateEvalQuestion(
+                id="ocr_quality_unavailable_dummy",
+                question="2024-12-24",
+                case_type="ocr_quality",
+                date="2024-12-24",
+                expected_min_ocr_processed=1,
+                allow_engine_unavailable=True,
+            )
+        ],
+    )
+
+    assert report["summary"]["passed"] == 1
+    assert report["case_results"][0]["ocr_processed_count"] == 1
+
+
+def test_private_eval_ocr_search_case_can_pass(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    _seed_ocr_record(repository)
+
+    report = evaluate_private_questions(
+        repository,
+        [
+            PrivateEvalQuestion(
+                id="ocr_search_dummy",
+                question="新宿",
+                case_type="ocr_search",
+                query="新宿",
+                expected_min_results=1,
+                expected_top_dates=["2024-12-24"],
+            )
+        ],
+    )
+
+    assert report["summary"]["passed"] == 1
+    assert report["case_results"][0]["result_count"] == 1
+
+
 def _seed_ocr_record(repository: LifelogRepository) -> None:
     repository.add_media_item(
         id="media_ocr_search",

@@ -51,8 +51,37 @@ VISUAL_QUERY_SYNONYMS: dict[str, list[str]] = {
     "車内": ["車内", "vehicle", "car", "vehicle_interior_possible", "car_seat_possible", "headrest"],
     "室内": ["室内", "indoor", "indoor_possible", "indoor_room_possible", "living_room_possible"],
     "アルバム": ["アルバム", "photo_album", "media content", "handwritten labels", "photo collage"],
+    "レシート": ["レシート", "receipt", "store_receipt", "printed_receipt", "total", "yen", "ocr_text"],
+    "メニュー": ["メニュー", "menu", "restaurant_menu", "food_menu", "price_list", "ocr_text"],
+    "チケット": ["チケット", "ticket", "admission_ticket", "event_ticket", "qr", "barcode", "ocr_text"],
+    "看板": ["看板", "sign", "signboard", "storefront", "street_sign", "ocr_text"],
     "駅": ["駅", "station", "station_possible", "train", "platform", "sign"],
     "新宿": ["新宿", "shinjuku", "station", "city", "urban", "sign", "train", "street", "station_possible", "city_possible"],
+    "パフォーマンス": [
+        "パフォーマンス",
+        "performance",
+        "performance_possible",
+        "performing_possible",
+        "stage",
+        "stage_possible",
+        "theater",
+        "theater_possible",
+        "performance_venue_possible",
+        "audience_present_possible",
+    ],
+    "ステージ": [
+        "ステージ",
+        "stage",
+        "stage_possible",
+        "theater",
+        "theater_possible",
+        "spotlights",
+        "speakers",
+        "performance_venue_possible",
+    ],
+    "ダンス": ["ダンス", "dancing", "dancing_possible", "performance_possible", "stage_possible"],
+    "発表": ["発表", "presentation", "stage", "performance", "audience_present_possible"],
+    "ライブ": ["ライブ", "live", "stage", "performance", "speakers", "spotlights"],
     # Keep photo generic terms narrow; expanding to "photo" or "image" makes
     # food queries match generic captions rather than food evidence.
     "写真": ["写真"],
@@ -85,7 +114,33 @@ def visual_query_terms_for_display(query: str, *, limit: int = 20) -> list[str]:
 
 def _rough_tokens(text: str) -> list[str]:
     ascii_tokens = re.findall(r"[A-Za-z0-9_]+", text)
-    jp_tokens = [token for token in ("ご飯", "食事", "料理", "カフェ", "ラーメン", "車内", "車", "室内", "アルバム", "駅", "新宿", "写真") if token in text]
+    jp_tokens = [
+        token
+        for token in (
+            "ご飯",
+            "食事",
+            "料理",
+            "カフェ",
+            "ラーメン",
+            "車内",
+            "車",
+            "室内",
+            "アルバム",
+            "レシート",
+            "メニュー",
+            "チケット",
+            "看板",
+            "駅",
+            "新宿",
+            "パフォーマンス",
+            "ステージ",
+            "ダンス",
+            "発表",
+            "ライブ",
+            "写真",
+        )
+        if token in text
+    ]
     return jp_tokens + ascii_tokens
 
 

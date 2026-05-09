@@ -20,6 +20,15 @@ def test_evidence_classifier_plan_candidate() -> None:
     assert classified.classification == "plan_or_candidate"
 
 
+def test_evidence_classifier_conditional_arrival_is_not_actual() -> None:
+    result = _day_result("新宿着いたら連絡して")
+
+    classified = classify_day_evidence(query="新宿", intent="place_visit", day_result=result)
+
+    assert classified.classification == "plan_or_candidate"
+    assert "actual語" not in "、".join(classified.reason_parts)
+
+
 def test_evidence_classifier_mention_only() -> None:
     result = _day_result("新宿ってすごい")
 

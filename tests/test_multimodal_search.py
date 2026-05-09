@@ -93,6 +93,38 @@ def test_multimodal_vlm_sql_fallback_returns_vlm_food_cues_without_embeddings(tm
     assert report["results"][0]["score_components"]["embedding_score"] == 0.0
 
 
+def test_multimodal_vlm_sql_fallback_returns_performance_tags(tmp_path: Path) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    repository.add_media_item(
+        id="media_vlm_sql_performance",
+        file_path=str(tmp_path / "stage.jpg"),
+        file_name="stage.jpg",
+        file_hash="hash-vlm-sql-performance",
+        media_type="image",
+        captured_at="2024-12-24T20:00:00+09:00",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_vlm_sql_performance",
+        caption="A stage or performance venue possible",
+        short_caption="Performance candidate",
+        scene_tags=["stage_possible", "theater_possible"],
+        activity_tags=["performance_possible"],
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+        model_name="local-qwen",
+    )
+
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(query="パフォーマンスっぽい写真", backend="vlm_sql", limit=5),
+    )
+
+    assert report["results"][0]["media_id"] == "media_vlm_sql_performance"
+    assert "performance_possible" in report["results"][0]["matched_terms"]
+
+
 def test_multimodal_vlm_sql_with_related_event_is_medium(tmp_path: Path) -> None:
     repository = _seed_multimodal_records(tmp_path)
 
@@ -177,9 +209,48 @@ def test_people_present_only_does_not_become_high_confidence(tmp_path: Path) -> 
     assert report["results"][0]["confidence_label"] != "高"
 
 
+def test_hybrid_visual_mismatch_context_does_not_become_strong(tmp_path: Path) -> None:
+    repository = _seed_visual_match_records(tmp_path)
+
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(query="ダンスの写真", backend="hybrid", limit=10),
+        engine=FixedQueryEmbeddingEngine(),
+    )
+    nonvisual = next(row for row in report["results"] if row["media_id"] == "media_nonvisual_context")
+
+    assert nonvisual["score_components"]["visual_match"] == 0.0
+    assert nonvisual["score_components"]["line_score"] <= 0.2
+    assert nonvisual["score_components"]["event_score"] <= 0.2
+    assert nonvisual["evidence_strength"] == "weak"
+    assert nonvisual["confidence_label"] == "低"
+
+
+def test_hybrid_visual_match_with_context_can_be_strong(tmp_path: Path) -> None:
+    repository = _seed_visual_match_records(tmp_path)
+
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(query="ダンスの写真", backend="hybrid", limit=10),
+        engine=FixedQueryEmbeddingEngine(),
+    )
+    visual = next(row for row in report["results"] if row["media_id"] == "media_visual_dance")
+
+    assert visual["score_components"]["visual_match"] == 1.0
+    assert visual["evidence_strength"] == "strong"
+    assert report["results"][0]["media_id"] == "media_visual_dance"
+
+
 def test_evidence_strength_rules() -> None:
     assert compute_multimodal_evidence_strength(evidence_types=["photo", "embedding"]) == "weak"
     assert compute_multimodal_evidence_strength(evidence_types=["photo", "embedding", "vlm"]) == "medium"
+    assert (
+        compute_multimodal_evidence_strength(
+            evidence_types=["photo", "embedding", "vlm", "event", "line", "gps"],
+            visual_match=False,
+        )
+        == "weak"
+    )
     assert (
         compute_multimodal_evidence_strength(evidence_types=["photo", "embedding", "vlm", "ocr", "line"])
         == "strong"
@@ -239,6 +310,101 @@ def _seed_multimodal_records(tmp_path: Path) -> LifelogRepository:
     return repository
 
 
+def _seed_visual_match_records(tmp_path: Path) -> LifelogRepository:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    repository.add_media_item(
+        id="media_nonvisual_context",
+        file_path=str(tmp_path / "children_collage.jpg"),
+        file_name="children_collage.jpg",
+        file_hash="hash-nonvisual-context",
+        media_type="image",
+        captured_at="2024-12-24T22:21:00+09:00",
+        gps_lat=35.0,
+        gps_lon=139.0,
+    )
+    repository.upsert_media_vlm(
+        media_id="media_nonvisual_context",
+        caption="Black-and-white photo collage of children",
+        short_caption="Photo collage",
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+    nonvisual_event_id = repository.add_event(
+        id="event_nonvisual_context",
+        date="2024-12-24",
+        start_time="22:00:00",
+        end_time="23:00:00",
+        title="食事・カフェの可能性",
+        summary="同日イベント",
+        confidence=0.95,
+        location_name="テスト場所",
+    )
+    repository.add_event_evidence(event_id=nonvisual_event_id, evidence_type="photo", evidence_id="media_nonvisual_context")
+    repository.add_line_message(
+        id="line_nonvisual_dance",
+        chat_id="chat_dummy",
+        source_file="sample_chat.txt",
+        sent_at="2024-12-24T22:30:00+09:00",
+        sender="自分",
+        text="ダンスの話をした",
+    )
+    MediaEmbeddingRepository(db_path).upsert_embedding(
+        media_id="media_nonvisual_context",
+        embedding_type="image",
+        embedding_model="fixed-test-embedding",
+        vector=[0.27, 0.96286136],
+        status="success",
+    )
+
+    repository.add_media_item(
+        id="media_visual_dance",
+        file_path=str(tmp_path / "dance.jpg"),
+        file_name="dance.jpg",
+        file_hash="hash-visual-dance",
+        media_type="image",
+        captured_at="2024-12-14T17:20:00+09:00",
+        gps_lat=35.1,
+        gps_lon=139.1,
+    )
+    repository.upsert_media_vlm(
+        media_id="media_visual_dance",
+        caption="Stage performance with dancing",
+        short_caption="Dance candidate",
+        activity_tags=["dancing_possible"],
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+    visual_event_id = repository.add_event(
+        id="event_visual_dance",
+        date="2024-12-14",
+        start_time="17:00:00",
+        end_time="18:00:00",
+        title="写真撮影の記録",
+        summary="ステージの写真",
+        confidence=0.8,
+        location_name="テスト会場",
+    )
+    repository.add_event_evidence(event_id=visual_event_id, evidence_type="photo", evidence_id="media_visual_dance")
+    repository.add_line_message(
+        id="line_visual_dance",
+        chat_id="chat_dummy",
+        source_file="sample_chat.txt",
+        sent_at="2024-12-14T17:30:00+09:00",
+        sender="自分",
+        text="ダンスの写真を撮った",
+    )
+    MediaEmbeddingRepository(db_path).upsert_embedding(
+        media_id="media_visual_dance",
+        embedding_type="image",
+        embedding_model="fixed-test-embedding",
+        vector=[0.3, 0.9539392],
+        status="success",
+    )
+    return repository
+
+
 class UnavailableEmbeddingEngine(MultimodalEmbeddingEngine):
     name = "unavailable-test"
     model_name = "unavailable-test"
@@ -254,3 +420,19 @@ class UnavailableEmbeddingEngine(MultimodalEmbeddingEngine):
 
     def embed_text(self, text: str):
         raise AssertionError("embed_text should not be called")
+
+
+class FixedQueryEmbeddingEngine(MultimodalEmbeddingEngine):
+    name = "fixed-test"
+    model_name = "fixed-test-embedding"
+
+    def is_available(self) -> bool:
+        return True
+
+    def embed_image(self, image_path: Path):
+        raise AssertionError("embed_image should not be called")
+
+    def embed_text(self, text: str):
+        from personal_lifelog_rag.embeddings.schemas import EmbeddingResult
+
+        return EmbeddingResult(vector=[1.0, 0.0], model_name=self.model_name, embedding_dim=2, status="success")

@@ -18,6 +18,17 @@ ingest:
   photos_dir: data/raw/photos
   line_exports_dir: data/raw/line
 
+ocr:
+  engine: "tesseract_cli"
+  languages: "jpn+eng"
+  tesseract_cmd: "tesseract"
+  psm: 6
+  oem: 1
+  min_confidence: 0.0
+  max_text_length: 5000
+  redact_sensitive: true
+  local_only: true
+
 event_building:
   generation_method: rule_based_daily_v2
   photo_gap_minutes: 90

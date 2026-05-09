@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -46,7 +47,10 @@ from personal_lifelog_rag.embeddings.embedding_service import (
     format_embedding_build_report,
     format_embedding_stats,
 )
-from personal_lifelog_rag.embeddings.engines import get_multimodal_embedding_engine
+from personal_lifelog_rag.embeddings.engines import (
+    get_cached_multimodal_embedding_engine,
+    get_multimodal_embedding_engine,
+)
 from personal_lifelog_rag.embeddings.multimodal_search import (
     format_multimodal_search,
     multimodal_search,
@@ -121,6 +125,8 @@ from personal_lifelog_rag.jobs.storage import (
 from personal_lifelog_rag.model_diagnostics import format_model_diagnostics, run_model_diagnostics
 from personal_lifelog_rag.ocr.local_ocr import get_ocr_adapter
 from personal_lifelog_rag.ocr.engines import get_ocr_engine
+from personal_lifelog_rag.ocr.config import load_ocr_runtime_config
+from personal_lifelog_rag.ocr.diagnostics import format_ocr_diagnostics, run_ocr_diagnostics
 from personal_lifelog_rag.ocr.ocr_service import (
     OcrImagesOptions,
     format_ocr_report,
@@ -167,6 +173,18 @@ from personal_lifelog_rag.retrieval.query_router import (
 )
 from personal_lifelog_rag.reporting.report_builder import DEFAULT_REPORTS_DIR, build_report, write_report
 from personal_lifelog_rag.reporting.schemas import ReportOptions
+from personal_lifelog_rag.rollout.monthly_rollout import (
+    DEFAULT_CONFIG_PATH as DEFAULT_MONTH_ROLLOUT_CONFIG_PATH,
+    format_month_batch_plan,
+    format_month_plan,
+    format_month_run_plan,
+    format_month_status,
+    month_batch_plan,
+    month_plan,
+    month_run_plan,
+    month_status,
+    parse_month,
+)
 from personal_lifelog_rag.retrieval.temporal_search import search_timeline
 from personal_lifelog_rag.timeline.event_builder import EventBuildConfig, build_all_events, build_events
 from personal_lifelog_rag.timeline.event_reports import (
@@ -219,11 +237,13 @@ from personal_lifelog_rag.vlm.status_cleanup import (
 )
 from personal_lifelog_rag.vlm.vlm_service import (
     VlmImagesOptions,
+    format_recover_failed_vlm_report,
     format_image_search,
     format_vlm_report,
     format_vlm_show,
     format_vlm_stats,
     image_search,
+    recover_failed_vlm_json_rows,
     run_vlm_images,
     vlm_stats,
 )
@@ -262,6 +282,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup_db_parser.add_argument("--label", default=None)
     backup_db_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BACKUP_DIR)
+
+    month_plan_parser = subparsers.add_parser(
+        "month-plan",
+        parents=[db_parent],
+        help="Plan a safe month-by-month VLM/embedding/rebuild rollout.",
+    )
+    month_plan_parser.add_argument("--month", required=True, help="Target month in YYYY-MM format.")
+    month_plan_parser.add_argument("--limit", type=int, default=300)
+    month_plan_parser.add_argument("--config", type=Path, default=DEFAULT_MONTH_ROLLOUT_CONFIG_PATH)
+    month_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    month_run_parser = subparsers.add_parser(
+        "month-run",
+        parents=[db_parent],
+        help="Run or dry-run a safe monthly rollout pipeline.",
+    )
+    month_run_parser.add_argument("--month", required=True, help="Target month in YYYY-MM format.")
+    month_run_parser.add_argument("--limit", type=int, default=300)
+    month_run_parser.add_argument("--vlm-limit", type=int, default=None)
+    month_run_parser.add_argument("--embedding-limit", type=int, default=None)
+    month_run_parser.add_argument("--config", type=Path, default=DEFAULT_MONTH_ROLLOUT_CONFIG_PATH)
+    month_run_parser.add_argument("--dry-run", action="store_true")
+    month_run_parser.add_argument("--skip-vlm", action="store_true")
+    month_run_parser.add_argument("--skip-embedding", action="store_true")
+    month_run_parser.add_argument("--skip-rebuild", action="store_true")
+    month_run_parser.add_argument("--skip-eval", action="store_true")
+    month_run_parser.add_argument("--skip-report", action="store_true")
+    month_run_parser.add_argument("--save-report", action="store_true")
+    month_run_parser.add_argument("--yes", action="store_true")
+    month_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    month_status_parser = subparsers.add_parser(
+        "month-status",
+        parents=[db_parent],
+        help="Show month rollout progress and artifact presence.",
+    )
+    month_status_parser.add_argument("--month", required=True, help="Target month in YYYY-MM format.")
+    month_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    month_batch_parser = subparsers.add_parser(
+        "month-batch",
+        parents=[db_parent],
+        help="Dry-run planning for several monthly rollouts.",
+    )
+    month_batch_parser.add_argument("--from-month", required=True)
+    month_batch_parser.add_argument("--to-month", required=True)
+    month_batch_parser.add_argument("--limit", type=int, default=300)
+    month_batch_parser.add_argument("--config", type=Path, default=DEFAULT_MONTH_ROLLOUT_CONFIG_PATH)
+    month_batch_parser.add_argument("--dry-run", action="store_true")
+    month_batch_parser.add_argument("--json", action="store_true", dest="as_json")
 
     analysis_plan_parser = subparsers.add_parser(
         "analysis-plan",
@@ -458,6 +528,19 @@ def build_parser() -> argparse.ArgumentParser:
     qa_parser.add_argument("--include-hidden", action="store_true")
     qa_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    batch_qa_parser = subparsers.add_parser(
+        "batch-qa",
+        parents=[db_parent],
+        help="Run multiple natural-language QA queries in one local process.",
+    )
+    batch_qa_parser.add_argument("--query", action="append", required=True, help="Question to run. Repeat for multiple queries.")
+    batch_qa_parser.add_argument("--limit", type=int, default=5)
+    batch_qa_parser.add_argument("--include-hidden", action="store_true")
+    batch_qa_parser.add_argument("--config", type=Path, default=None, help="Optional private model runtime config.")
+    batch_qa_parser.add_argument("--output-json", type=Path, default=None)
+    batch_qa_parser.add_argument("--output-md", type=Path, default=None)
+    batch_qa_parser.add_argument("--save-run", action="store_true")
+
     ui_parser = subparsers.add_parser(
         "ui",
         parents=[db_parent],
@@ -558,6 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_images_parser.add_argument("--dry-run", action="store_true")
     analyze_images_parser.add_argument("--force", action="store_true")
     analyze_images_parser.add_argument("--skip-existing", action="store_true")
+    analyze_images_parser.add_argument("--failed-only", action="store_true")
     analyze_images_parser.add_argument("--only-with-ocr", action="store_true")
     analyze_images_parser.add_argument("--only-gps", action="store_true")
     analyze_images_parser.add_argument("--ocr-backend", default=None)
@@ -565,6 +649,23 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_images_parser.add_argument("--vlm-model", default=None)
     analyze_images_parser.add_argument("--prompt-template", default=None)
     analyze_images_parser.add_argument("--allow-fake-write", action="store_true")
+
+    retry_vlm_failed_parser = subparsers.add_parser(
+        "retry-vlm-failed",
+        parents=[db_parent],
+        help="Retry local VLM rows whose previous status is failed.",
+    )
+    retry_vlm_failed_parser.add_argument("--date", default=None)
+    retry_vlm_failed_parser.add_argument("--from", dest="from_date", default=None)
+    retry_vlm_failed_parser.add_argument("--to", dest="to_date", default=None)
+    retry_vlm_failed_parser.add_argument("--limit", type=int, default=20)
+    retry_vlm_failed_parser.add_argument("--engine", default=None)
+    retry_vlm_failed_parser.add_argument("--model", default=None)
+    retry_vlm_failed_parser.add_argument("--config", type=Path, default=None)
+    retry_vlm_failed_parser.add_argument("--prompt-template", default=None)
+    retry_vlm_failed_parser.add_argument("--dry-run", action="store_true")
+    retry_vlm_failed_parser.add_argument("--rerun-model", action="store_true")
+    retry_vlm_failed_parser.add_argument("--allow-fake-write", action="store_true")
 
     vlm_stats_parser = subparsers.add_parser(
         "vlm-stats",
@@ -819,6 +920,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_qwen_parser.add_argument("--output-dir", type=Path, default=DEFAULT_BENCHMARK_OUTPUT_DIR)
     benchmark_qwen_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    ocr_diag_parser = subparsers.add_parser(
+        "ocr-diagnostics",
+        help="Inspect local OCR engine availability without using cloud OCR.",
+    )
+    ocr_diag_parser.add_argument("--config", type=Path, default=None)
+    ocr_diag_parser.add_argument("--json", action="store_true", dest="as_json")
+
     ocr_images_parser = subparsers.add_parser(
         "ocr-images",
         parents=[db_parent],
@@ -830,7 +938,8 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_images_parser.add_argument("--all", action="store_true")
     ocr_images_parser.add_argument("--limit", type=int, default=100)
     ocr_images_parser.add_argument("--engine", default=None)
-    ocr_images_parser.add_argument("--languages", default="jpn+eng")
+    ocr_images_parser.add_argument("--config", type=Path, default=None)
+    ocr_images_parser.add_argument("--languages", default=None)
     ocr_images_parser.add_argument("--dry-run", action="store_true")
     ocr_images_parser.add_argument("--force", action="store_true")
     ocr_images_parser.add_argument("--skip-existing", action="store_true")
@@ -853,6 +962,19 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_show_parser.add_argument("--date", default=None)
     ocr_show_parser.add_argument("--limit", type=int, default=10)
     ocr_show_parser.add_argument("--full", action="store_true")
+    ocr_show_parser.add_argument("--show-errors", action="store_true")
+
+    ocr_search_parser = subparsers.add_parser(
+        "ocr-search",
+        parents=[db_parent],
+        help="Search local OCR text and redacted previews.",
+    )
+    ocr_search_parser.add_argument("query")
+    ocr_search_parser.add_argument("--from", dest="from_date", default=None)
+    ocr_search_parser.add_argument("--to", dest="to_date", default=None)
+    ocr_search_parser.add_argument("--limit", type=int, default=20)
+    ocr_search_parser.add_argument("--include-non-success", action="store_true")
+    ocr_search_parser.add_argument("--json", action="store_true", dest="as_json")
 
     build_events_parser = subparsers.add_parser(
         "build-events",
@@ -1439,6 +1561,276 @@ def run_generate_report_cli(
     return 0
 
 
+def run_month_plan_cli(
+    db_path: Path | None,
+    *,
+    month: str,
+    limit: int,
+    config_path: Path | None,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    plan = month_plan(repository, month=month, limit=limit, config_path=config_path)
+    print(json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_month_plan(plan))
+    return 0
+
+
+def run_month_status_cli(
+    db_path: Path | None,
+    *,
+    month: str,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    status = month_status(repository, month=month)
+    print(json.dumps(status, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_month_status(status))
+    return 0
+
+
+def run_month_batch_cli(
+    db_path: Path | None,
+    *,
+    from_month: str,
+    to_month: str,
+    limit: int,
+    config_path: Path | None,
+    dry_run: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    plan = month_batch_plan(repository, from_month=from_month, to_month=to_month, limit=limit, config_path=config_path)
+    if not dry_run:
+        plan["warning"] = "month-batch is planning-only in this version; run month-run one month at a time."
+    print(json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_month_batch_plan(plan))
+    return 0
+
+
+def run_month_run_cli(
+    db_path: Path | None,
+    *,
+    month: str,
+    limit: int,
+    vlm_limit: int | None,
+    embedding_limit: int | None,
+    config_path: Path | None,
+    dry_run: bool,
+    skip_vlm: bool,
+    skip_embedding: bool,
+    skip_rebuild: bool,
+    skip_eval: bool,
+    skip_report: bool,
+    save_report: bool,
+    yes: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    plan = month_run_plan(
+        repository,
+        month=month,
+        limit=limit,
+        vlm_limit=vlm_limit,
+        embedding_limit=embedding_limit,
+        config_path=config_path,
+        save_report=save_report,
+        skip_vlm=skip_vlm,
+        skip_embedding=skip_embedding,
+        skip_rebuild=skip_rebuild,
+        skip_eval=skip_eval,
+        skip_report=skip_report,
+    )
+    if dry_run:
+        print(json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) if as_json else format_month_run_plan(plan, dry_run=True))
+        return 0
+    if not yes:
+        if as_json:
+            payload = dict(plan)
+            payload["error"] = "month-run requires --yes for real execution"
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_month_run_plan(plan, dry_run=False))
+            print("")
+            print("Refusing to run without --yes. Re-run with --dry-run first, then add --yes when ready.")
+        return 2
+
+    rng = parse_month(month)
+    resolved_vlm_limit = int(plan["limits"]["vlm_limit"])
+    resolved_embedding_limit = int(plan["limits"]["embedding_limit"])
+    step_results: list[dict[str, object]] = []
+
+    def run_step(name: str, callback) -> int:
+        print("")
+        print(f"== {name} ==")
+        started = time.perf_counter()
+        try:
+            code = int(callback())
+            elapsed = time.perf_counter() - started
+            step_results.append({"name": name, "status": "success" if code == 0 else "failed", "exit_code": code, "elapsed_sec": round(elapsed, 3)})
+            if code:
+                print(f"Step failed: {name}. Next recovery command: python -m personal_lifelog_rag.app.cli month-status --month {rng.month}")
+            return code
+        except Exception as exc:  # pragma: no cover - defensive safety path
+            elapsed = time.perf_counter() - started
+            step_results.append({"name": name, "status": "failed", "exit_code": 1, "elapsed_sec": round(elapsed, 3), "error": f"{type(exc).__name__}: {exc}"})
+            print(f"Step failed: {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(f"Next recovery command: python -m personal_lifelog_rag.app.cli month-status --month {rng.month}", file=sys.stderr)
+            return 1
+
+    code = run_step(
+        "backup-db",
+        lambda: run_backup_db(db_path, label=f"before_month_rollout_{rng.month.replace('-', '_')}", output_dir=DEFAULT_BACKUP_DIR),
+    )
+    if code:
+        return code
+    if not skip_vlm:
+        code = run_step(
+            "analyze-images",
+            lambda: run_analyze_images(
+                db_path,
+                date_value=None,
+                from_date=rng.start_date,
+                to_date=rng.end_date,
+                all_dates=False,
+                limit=resolved_vlm_limit,
+                engine_name="qwen3_vl_transformers",
+                model_name=None,
+                config_path=config_path,
+                dry_run=False,
+                force=False,
+                skip_existing=True,
+                only_with_ocr=False,
+                only_gps=False,
+                ocr_backend=None,
+                vlm_backend=None,
+                vlm_model=None,
+                prompt_template="lifelog_structured_tags_v1",
+                allow_fake_write=False,
+                failed_only=False,
+            ),
+        )
+        if code:
+            return code
+    if not skip_embedding:
+        code = run_step(
+            "build-image-embeddings",
+            lambda: run_build_image_embeddings_cli(
+                db_path,
+                date_value=None,
+                from_date=rng.start_date,
+                to_date=rng.end_date,
+                limit=resolved_embedding_limit,
+                engine_name="qwen3_vl_embedding",
+                model_name=None,
+                model_path=None,
+                config_path=config_path,
+                dry_run=False,
+                force=False,
+                skip_existing=True,
+                allow_fake_write=False,
+            ),
+        )
+        if code:
+            return code
+        code = run_step(
+            "build-text-embeddings",
+            lambda: run_build_text_embeddings_cli(
+                db_path,
+                date_value=None,
+                from_date=rng.start_date,
+                to_date=rng.end_date,
+                limit=resolved_embedding_limit,
+                embedding_type="combined_text",
+                engine_name="qwen3_vl_embedding",
+                model_name=None,
+                model_path=None,
+                config_path=config_path,
+                dry_run=False,
+                force=False,
+                skip_existing=True,
+                allow_fake_write=False,
+            ),
+        )
+        if code:
+            return code
+    if not skip_rebuild:
+        code = run_step(
+            "rebuild-events-with-analysis",
+            lambda: run_rebuild_events_with_analysis_cli(
+                db_path,
+                date_value=None,
+                from_date=rng.start_date,
+                to_date=rng.end_date,
+                dry_run=False,
+                save_report=save_report,
+                force=True,
+                eval_path=None,
+                output_dir=DEFAULT_EVENT_REBUILD_OUTPUT_DIR,
+                backup_dir=DEFAULT_BACKUP_DIR,
+                as_json=False,
+            ),
+        )
+        if code:
+            return code
+    code = run_step("db-check", lambda: run_db_check_cli(db_path, as_json=False, strict=True))
+    if code:
+        return code
+    eval_path = Path("private_eval") / f"questions_{rng.month.replace('-', '')}_month.yaml"
+    if not skip_eval and eval_path.exists():
+        code = run_step(
+            "eval-private",
+            lambda: run_private_eval(
+                db_path,
+                questions_path=eval_path,
+                output_dir=DEFAULT_RUNS_DIR,
+                as_json=False,
+                limit=None,
+                case_id=None,
+                save_run=True,
+                init_template=False,
+                strict=False,
+            ),
+        )
+        if code:
+            return code
+    elif not skip_eval:
+        print("")
+        print(f"== eval-private ==")
+        print(f"Skipped: {eval_path} not found")
+        step_results.append({"name": "eval-private", "status": "skipped", "reason": f"{eval_path} not found"})
+    if not skip_report:
+        code = run_step(
+            "generate-report",
+            lambda: run_generate_report_cli(
+                db_path,
+                from_date=rng.start_date,
+                to_date=rng.end_date,
+                public_mode=True,
+                private_mode=False,
+                eval_path=None,
+                eval_run=None,
+                output=None,
+                include_examples=False,
+                no_examples=True,
+                save_json=save_report,
+            ),
+        )
+        if code:
+            return code
+
+    summary = {"month": rng.month, "status": "completed", "steps": step_results}
+    print("")
+    print("Month run completed")
+    if as_json:
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        for step in step_results:
+            print(f"- {step['name']}: {step['status']}")
+    return 0
+
+
 def _analysis_plan_options_from_args(args, *, command_name: str) -> AnalysisPlanOptions:
     start_date, end_date = _resolve_range_selection(
         date_value=args.date,
@@ -1557,6 +1949,208 @@ def run_qa(
     else:
         print(format_routed_query_result(result))
     return 0
+
+
+def run_batch_qa(
+    db_path: Path | None,
+    queries: Sequence[str],
+    *,
+    limit: int,
+    include_hidden: bool,
+    config_path: Path | None,
+    output_json: Path | None,
+    output_md: Path | None,
+    save_run: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    multimodal_config = _load_multimodal_runtime_config(config_path)
+    multimodal_engine = _cached_batch_multimodal_engine(multimodal_config)
+    started = datetime.now()
+    rows: list[dict[str, object]] = []
+    for query in queries:
+        query_started = time.perf_counter()
+        try:
+            result = route_query(
+                repository,
+                query,
+                limit=limit,
+                include_hidden=include_hidden,
+                multimodal_config=multimodal_config,
+                multimodal_engine=multimodal_engine,
+            )
+            elapsed = time.perf_counter() - query_started
+            answer = redact_text(result.answer, max_chars=2000)
+            rows.append(
+                {
+                    "query": query,
+                    "intent": result.intent,
+                    "intent_confidence": result.intent_confidence,
+                    "routing": result.routing,
+                    "success": bool(result.answer.strip()),
+                    "elapsed_sec": round(elapsed, 3),
+                    "answer": answer,
+                    "answer_summary": redact_text(result.answer, max_chars=500),
+                    "result_count": len(result.results),
+                    "results": result.results[:5],
+                    "intent_reasons": result.intent_reasons,
+                    "error_message": None,
+                }
+            )
+        except Exception as exc:  # pragma: no cover - defensive CLI boundary
+            elapsed = time.perf_counter() - query_started
+            rows.append(
+                {
+                    "query": query,
+                    "intent": None,
+                    "routing": None,
+                    "success": False,
+                    "elapsed_sec": round(elapsed, 3),
+                    "answer": "",
+                    "answer_summary": "",
+                    "result_count": 0,
+                    "error_message": f"{exc.__class__.__name__}: {exc}",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+    report = {
+        "created_at": started.isoformat(timespec="seconds"),
+        "queries": rows,
+        "summary": {
+            "total": len(rows),
+            "success": sum(1 for row in rows if row.get("success")),
+            "failed": sum(1 for row in rows if not row.get("success")),
+            "elapsed_sec": round(sum(float(row.get("elapsed_sec") or 0.0) for row in rows), 3),
+        },
+        "model_cache": {
+            "enabled": multimodal_engine is not None,
+            "engine": getattr(multimodal_engine, "name", None) if multimodal_engine is not None else None,
+            "model_name": getattr(multimodal_engine, "model_name", None) if multimodal_engine is not None else None,
+            "strategy": "same-process cached embedding engine" if multimodal_engine is not None else "no configured embedding engine",
+        },
+    }
+    json_path, md_path = _resolve_batch_qa_output_paths(
+        output_json=output_json,
+        output_md=output_md,
+        save_run=save_run,
+        created_at=started,
+    )
+    if json_path is not None:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+    if md_path is not None:
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(_format_batch_qa_markdown(report), encoding="utf-8")
+    print(_format_batch_qa_text(report, json_path=json_path, md_path=md_path))
+    return 0
+
+
+def _load_multimodal_runtime_config(config_path: Path | None) -> dict[str, object]:
+    path = config_path
+    if path is None:
+        default_model_config = Path("private_config/model_runtime.yaml")
+        path = default_model_config if default_model_config.exists() else None
+    if path is None or not path.exists():
+        return {}
+    return load_model_runtime_config(path).multimodal_embedding.to_dict()
+
+
+def _cached_batch_multimodal_engine(config: dict[str, object]):
+    if not any(config.get(key) for key in ("engine", "model_name", "model_path")):
+        return None
+    local_files_only = config.get("local_files_only")
+    return get_cached_multimodal_embedding_engine(
+        str(config.get("engine") or "noop"),
+        model_name=str(config.get("model_name")) if config.get("model_name") else None,
+        model_path=str(config.get("model_path")) if config.get("model_path") else None,
+        device=str(config.get("device") or "auto"),
+        dtype=str(config.get("dtype")) if config.get("dtype") is not None else None,
+        local_files_only=True if local_files_only is None else bool(local_files_only),
+        embedding_dim=int(config["embedding_dim"]) if config.get("embedding_dim") is not None else None,
+        batch_size=int(config["batch_size"]) if config.get("batch_size") is not None else None,
+    )
+
+
+def _resolve_batch_qa_output_paths(
+    *,
+    output_json: Path | None,
+    output_md: Path | None,
+    save_run: bool,
+    created_at: datetime,
+) -> tuple[Path | None, Path | None]:
+    if save_run:
+        output_dir = Path("eval_outputs/batch_qa")
+        stem = "batch_qa_" + created_at.strftime("%Y%m%d_%H%M%S")
+        output_json = output_json or output_dir / f"{stem}.json"
+        output_md = output_md or output_dir / f"{stem}.md"
+    return output_json, output_md
+
+
+def _format_batch_qa_text(report: dict[str, object], *, json_path: Path | None, md_path: Path | None) -> str:
+    summary = report["summary"]  # type: ignore[index]
+    model_cache = report.get("model_cache") or {}
+    lines = [
+        "Batch QA",
+        "",
+        f"queries: {summary['total']}",  # type: ignore[index]
+        f"success: {summary['success']}",  # type: ignore[index]
+        f"failed: {summary['failed']}",  # type: ignore[index]
+        f"model_cache: {model_cache.get('strategy') if isinstance(model_cache, dict) else ''}",
+        "",
+    ]
+    for index, row in enumerate(report["queries"], start=1):  # type: ignore[index]
+        lines.extend(
+            [
+                f"{index}. {row['query']}",
+                f"   intent: {row.get('intent')} routing: {row.get('routing')} elapsed={row.get('elapsed_sec')}s",
+                f"   success: {row.get('success')} results={row.get('result_count')}",
+                f"   answer: {row.get('answer_summary')}",
+            ]
+        )
+        if row.get("error"):
+            lines.append(f"   error: {row['error']}")
+        elif row.get("error_message"):
+            lines.append(f"   error: {row['error_message']}")
+    if json_path is not None:
+        lines.append(f"json: {json_path}")
+    if md_path is not None:
+        lines.append(f"markdown: {md_path}")
+    return "\n".join(lines)
+
+
+def _format_batch_qa_markdown(report: dict[str, object]) -> str:
+    summary = report["summary"]  # type: ignore[index]
+    model_cache = report.get("model_cache") or {}
+    lines = [
+        "# Batch QA Run",
+        "",
+        f"- created_at: {report['created_at']}",
+        f"- queries: {summary['total']}",  # type: ignore[index]
+        f"- success: {summary['success']}",  # type: ignore[index]
+        f"- failed: {summary['failed']}",  # type: ignore[index]
+        f"- model_cache: {model_cache.get('strategy') if isinstance(model_cache, dict) else ''}",
+        "",
+        "## Results",
+        "",
+    ]
+    for index, row in enumerate(report["queries"], start=1):  # type: ignore[index]
+        lines.extend(
+            [
+                f"### {index}. {row['query']}",
+                "",
+                f"- intent: {row.get('intent')}",
+                f"- routing: {row.get('routing')}",
+                f"- success: {row.get('success')}",
+                f"- elapsed_sec: {row.get('elapsed_sec')}",
+                f"- result_count: {row.get('result_count')}",
+                "",
+                str(row.get("answer_summary") or ""),
+                "",
+            ]
+        )
+        if row.get("error") or row.get("error_message"):
+            lines.extend([f"- error: {row.get('error') or row.get('error_message')}", ""])
+    return "\n".join(lines)
 
 
 def run_ui(db_path: Path | None, host: str, port: int) -> int:
@@ -1777,6 +2371,7 @@ def run_analyze_images(
     vlm_model: str | None,
     prompt_template: str | None = None,
     allow_fake_write: bool = False,
+    failed_only: bool = False,
 ) -> int:
     config = load_model_runtime_config(config_path).vlm
     resolved_engine = engine_name or config.engine
@@ -1836,6 +2431,7 @@ def run_analyze_images(
                 only_with_ocr=only_with_ocr,
                 only_gps=only_gps,
                 prompt_template=resolved_prompt_template,
+                failed_only=failed_only,
             ),
             engine=get_vlm_engine(
                 resolved_engine,
@@ -1860,6 +2456,89 @@ def run_analyze_images(
     )
     print(format_analysis_report(report))
     return 0
+
+
+def run_retry_vlm_failed_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    engine_name: str | None,
+    model_name: str | None,
+    config_path: Path | None,
+    prompt_template: str | None,
+    dry_run: bool,
+    allow_fake_write: bool,
+    rerun_model: bool = False,
+) -> int:
+    start_date, end_date = _resolve_range_selection(
+        date_value=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        all_dates=False,
+        command_name="retry-vlm-failed",
+        allow_all_without_dates=False,
+    )
+    config = load_model_runtime_config(config_path).vlm
+    resolved_engine = engine_name or config.engine
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    if dry_run:
+        rows = repository.list_media_vlm(start_date=start_date, end_date=end_date, statuses=["failed"], limit=max(limit, 0))
+        if resolved_engine:
+            rows = [row for row in rows if str(row.get("vlm_engine") or "") == resolved_engine]
+        print(
+            format_recover_failed_vlm_report(
+                {
+                    "selected_failed_rows": len(rows),
+                    "recovered": 0,
+                    "unrecovered": len(rows),
+                    "remaining_failed_hint": len(rows),
+                    "rows": [
+                        {"media_id": row.get("media_id"), "status": "pending", "reason": "dry-run"}
+                        for row in rows[:20]
+                    ],
+                }
+            )
+        )
+        return 0
+    repair_report = recover_failed_vlm_json_rows(
+        repository,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        engine=resolved_engine,
+    )
+    print(format_recover_failed_vlm_report(repair_report))
+    if not rerun_model:
+        if repair_report.get("unrecovered"):
+            print("")
+            print("Use --rerun-model to run Qwen3-VL again for rows that cannot be repaired from stored output.")
+        return 0
+    return run_analyze_images(
+        db_path,
+        date_value=None,
+        from_date=start_date,
+        to_date=end_date,
+        all_dates=False,
+        limit=limit,
+        engine_name=engine_name,
+        model_name=model_name,
+        config_path=config_path,
+        dry_run=dry_run,
+        force=True,
+        skip_existing=False,
+        only_with_ocr=False,
+        only_gps=False,
+        ocr_backend=None,
+        vlm_backend=None,
+        vlm_model=None,
+        prompt_template=prompt_template,
+        allow_fake_write=allow_fake_write,
+        failed_only=True,
+    )
 
 
 def run_vlm_stats_cli(
@@ -2575,7 +3254,8 @@ def run_ocr_images_cli(
     all_dates: bool,
     limit: int,
     engine_name: str | None,
-    languages: str,
+    config_path: Path | None,
+    languages: str | None,
     dry_run: bool,
     force: bool,
     skip_existing: bool,
@@ -2590,6 +3270,9 @@ def run_ocr_images_cli(
     )
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
+    ocr_config = load_ocr_runtime_config(config_path)
+    resolved_engine_name = engine_name or ocr_config.engine
+    resolved_languages = languages or ocr_config.languages
 
     def progress(message: str) -> None:
         print(message, file=sys.stderr)
@@ -2601,16 +3284,25 @@ def run_ocr_images_cli(
             end_date=end_date,
             all_dates=all_dates,
             limit=limit,
-            engine_name=engine_name,
-            languages=_parse_languages(languages),
+            engine_name=resolved_engine_name,
+            languages=_parse_languages(resolved_languages),
             dry_run=dry_run,
             force=force,
             skip_existing=skip_existing,
         ),
-        engine=get_ocr_engine(engine_name),
+        engine=get_ocr_engine(resolved_engine_name, config=ocr_config),
         progress_callback=progress,
     )
     print(format_ocr_report(report))
+    return 0
+
+
+def run_ocr_diagnostics_cli(*, config_path: Path | None, as_json: bool) -> int:
+    report = run_ocr_diagnostics(config_path)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_ocr_diagnostics(report))
     return 0
 
 
@@ -2638,6 +3330,7 @@ def run_ocr_show_cli(
     date_value: str | None,
     limit: int,
     full: bool,
+    show_errors: bool,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
@@ -2650,7 +3343,59 @@ def run_ocr_show_cli(
             end_date=date_value,
             limit=limit,
         )
-    print(format_ocr_show(rows, full=full))
+    print(format_ocr_show(rows, full=full, show_errors=show_errors))
+    return 0
+
+
+def run_ocr_search_cli(
+    db_path: Path | None,
+    *,
+    query: str,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    include_non_success: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    statuses = None if include_non_success else ["success"]
+    rows = repository.list_media_ocr(
+        start_date=from_date,
+        end_date=to_date or from_date,
+        statuses=statuses,
+        keyword=query,
+        limit=limit,
+    )
+    payload = {
+        "query": query,
+        "results": [
+            {
+                "media_id": row.get("media_id"),
+                "file_name": row.get("file_name"),
+                "captured_at": row.get("captured_at") or row.get("fallback_captured_at"),
+                "status": row.get("status"),
+                "engine": row.get("ocr_engine"),
+                "text": redact_text(row.get("ocr_text_redacted") or row.get("ocr_text"), max_chars=180),
+            }
+            for row in rows
+        ],
+    }
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    lines = [f"OCR Search: {query}", f"results: {len(rows)}"]
+    for index, row in enumerate(payload["results"], start=1):
+        lines.extend(
+            [
+                "",
+                f"{index}. {row['captured_at'] or ''} media_id={row['media_id']}",
+                f"   file: {row['file_name'] or ''}",
+                f"   status: {row['status']} engine: {row['engine']}",
+                f"   text: {row['text'] or ''}",
+            ]
+        )
+    print("\n".join(lines))
     return 0
 
 
@@ -3388,6 +4133,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_stats(db_path)
     if args.command == "backup-db":
         return run_backup_db(db_path, label=args.label, output_dir=args.output_dir)
+    if args.command == "month-plan":
+        try:
+            return run_month_plan_cli(
+                db_path,
+                month=args.month,
+                limit=args.limit,
+                config_path=args.config,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "month-run":
+        try:
+            return run_month_run_cli(
+                db_path,
+                month=args.month,
+                limit=args.limit,
+                vlm_limit=args.vlm_limit,
+                embedding_limit=args.embedding_limit,
+                config_path=args.config,
+                dry_run=args.dry_run,
+                skip_vlm=args.skip_vlm,
+                skip_embedding=args.skip_embedding,
+                skip_rebuild=args.skip_rebuild,
+                skip_eval=args.skip_eval,
+                skip_report=args.skip_report,
+                save_report=args.save_report,
+                yes=args.yes,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "month-status":
+        try:
+            return run_month_status_cli(db_path, month=args.month, as_json=args.as_json)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "month-batch":
+        try:
+            return run_month_batch_cli(
+                db_path,
+                from_month=args.from_month,
+                to_month=args.to_month,
+                limit=args.limit,
+                config_path=args.config,
+                dry_run=args.dry_run,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.command == "analysis-plan":
         return run_analysis_plan_cli(db_path, args=args)
     if args.command == "analysis-run":
@@ -3487,6 +4282,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_hidden=args.include_hidden,
             as_json=args.as_json,
         )
+    if args.command == "batch-qa":
+        return run_batch_qa(
+            db_path,
+            args.query,
+            limit=args.limit,
+            include_hidden=args.include_hidden,
+            config_path=args.config,
+            output_json=args.output_json,
+            output_md=args.output_md,
+            save_run=args.save_run,
+        )
     if args.command == "ui":
         return run_ui(db_path, args.host, args.port)
     if args.command == "build-embeddings":
@@ -3568,6 +4374,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 vlm_backend=args.vlm_backend,
                 vlm_model=args.vlm_model,
                 prompt_template=args.prompt_template,
+                allow_fake_write=args.allow_fake_write,
+                failed_only=args.failed_only,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "retry-vlm-failed":
+        try:
+            return run_retry_vlm_failed_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                limit=args.limit,
+                engine_name=args.engine,
+                model_name=args.model,
+                config_path=args.config,
+                prompt_template=args.prompt_template,
+                dry_run=args.dry_run,
+                rerun_model=args.rerun_model,
                 allow_fake_write=args.allow_fake_write,
             )
         except ValueError as exc:
@@ -3778,6 +4603,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output_dir,
             as_json=args.as_json,
         )
+    if args.command == "ocr-diagnostics":
+        return run_ocr_diagnostics_cli(
+            config_path=args.config,
+            as_json=args.as_json,
+        )
     if args.command == "ocr-images":
         try:
             return run_ocr_images_cli(
@@ -3788,6 +4618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 all_dates=args.all,
                 limit=args.limit,
                 engine_name=args.engine,
+                config_path=args.config,
                 languages=args.languages,
                 dry_run=args.dry_run,
                 force=args.force,
@@ -3809,6 +4640,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             date_value=args.date,
             limit=args.limit,
             full=args.full,
+            show_errors=args.show_errors,
+        )
+    if args.command == "ocr-search":
+        return run_ocr_search_cli(
+            db_path,
+            query=args.query,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            include_non_success=args.include_non_success,
+            as_json=args.as_json,
         )
     if args.command == "build-events":
         try:

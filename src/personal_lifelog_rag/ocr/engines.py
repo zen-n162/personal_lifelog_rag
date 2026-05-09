@@ -8,6 +8,7 @@ import subprocess
 from typing import Mapping
 
 from personal_lifelog_rag.ocr.base import OcrEngine
+from personal_lifelog_rag.ocr.config import OcrRuntimeConfig
 from personal_lifelog_rag.ocr.image_preprocess import preprocessed_image_path
 from personal_lifelog_rag.ocr.schemas import OcrBlock, OcrResult
 
@@ -50,9 +51,20 @@ class FakeOcrEngine:
 class TesseractCliOcrEngine:
     name = "tesseract_cli"
 
-    def __init__(self, *, binary: str = "tesseract", timeout_sec: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        binary: str = "tesseract",
+        timeout_sec: int = 60,
+        psm: int | None = 6,
+        oem: int | None = 1,
+        max_text_length: int = 5000,
+    ) -> None:
         self.binary = binary
         self.timeout_sec = timeout_sec
+        self.psm = psm
+        self.oem = oem
+        self.max_text_length = max_text_length
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -67,8 +79,13 @@ class TesseractCliOcrEngine:
         lang = "+".join(languages) if languages else "jpn+eng"
         try:
             with preprocessed_image_path(image_path) as processed_path:
+                command = [self.binary, str(processed_path), "stdout", "-l", lang]
+                if self.psm is not None:
+                    command.extend(["--psm", str(self.psm)])
+                if self.oem is not None:
+                    command.extend(["--oem", str(self.oem)])
                 completed = subprocess.run(
-                    [self.binary, str(processed_path), "stdout", "-l", lang],
+                    command,
                     check=False,
                     capture_output=True,
                     text=True,
@@ -78,17 +95,17 @@ class TesseractCliOcrEngine:
             return OcrResult(
                 engine=self.name,
                 status="failed",
-                error_message=f"OCR failed with {exc.__class__.__name__}",
+                error_message=f"OCR failed with {exc.__class__.__name__}: {exc!r}",
             )
         if completed.returncode != 0:
             return OcrResult(
                 engine=self.name,
                 status="failed",
-                error_message=(completed.stderr or "tesseract failed").strip()[:300],
+                error_message=(completed.stderr or "tesseract failed").strip()[:1000],
             )
-        text = completed.stdout.strip()
+        text = completed.stdout.strip()[: self.max_text_length]
         if not text:
-            return OcrResult(engine=self.name, status="no_text")
+            return OcrResult(engine=self.name, status="no_text_detected")
         return OcrResult(
             text=text,
             engine=self.name,
@@ -133,14 +150,47 @@ class PyTesseractOcrEngine:
         return OcrResult(text=text, engine=self.name, status="success", blocks=[OcrBlock(text=text)])
 
 
-def get_ocr_engine(name: str | None = None) -> OcrEngine:
-    resolved = (name or "tesseract_cli").strip().lower()
+class PaddleOcrLocalEngine:
+    """Optional PaddleOCR skeleton.
+
+    PaddleOCR can download model assets if used naively. Until local model
+    directories are explicitly configured, this adapter reports unavailable
+    rather than trying to instantiate PaddleOCR.
+    """
+
+    name = "paddleocr_local"
+
+    def __init__(self) -> None:
+        try:
+            import paddleocr  # noqa: F401
+
+            self.import_error = None
+        except Exception as exc:  # pragma: no cover - depends on environment
+            self.import_error = f"{exc.__class__.__name__}: {exc!r}"
+
+    def is_available(self) -> bool:
+        return False
+
+    def recognize(self, image_path: Path, languages: list[str]) -> OcrResult:
+        reason = self.import_error or "paddleocr_local is a local-only skeleton; no automatic model download"
+        return OcrResult(engine=self.name, status="engine_unavailable", error_message=reason)
+
+
+def get_ocr_engine(name: str | None = None, *, config: OcrRuntimeConfig | None = None) -> OcrEngine:
+    resolved = (name or (config.engine if config else None) or "tesseract_cli").strip().lower()
     if resolved in {"noop", "none", "disabled", "off"}:
         return NoopOcrEngine()
     if resolved == "fake":
         return FakeOcrEngine()
     if resolved in {"tesseract", "tesseract_cli", "tesseract-cli"}:
-        return TesseractCliOcrEngine()
+        return TesseractCliOcrEngine(
+            binary=(config.tesseract_cmd if config else "tesseract"),
+            psm=(config.psm if config else 6),
+            oem=(config.oem if config else 1),
+            max_text_length=(config.max_text_length if config else 5000),
+        )
     if resolved in {"pytesseract", "python-tesseract"}:
         return PyTesseractOcrEngine()
+    if resolved in {"paddleocr", "paddleocr_local"}:
+        return PaddleOcrLocalEngine()
     return NoopOcrEngine()

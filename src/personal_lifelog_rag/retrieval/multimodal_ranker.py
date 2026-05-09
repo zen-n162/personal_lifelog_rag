@@ -18,6 +18,7 @@ VLM_TEXT_KEYS = (
 )
 OCR_KEYS = ("ocr_text", "ocr_text_redacted")
 PLACE_KEYS = ("location_name", "effective_location_name", "location_name_override")
+VISUAL_MATCH_EMBEDDING_THRESHOLD = 0.35
 
 
 def score_multimodal_components(
@@ -27,6 +28,9 @@ def score_multimodal_components(
     embedding_score: float,
     related_event: dict[str, Any] | None,
     line_matches: list[dict[str, Any]],
+    sql_score: float = 0.0,
+    matched_terms: list[str] | None = None,
+    visual_match_embedding_threshold: float = VISUAL_MATCH_EMBEDDING_THRESHOLD,
 ) -> dict[str, float]:
     """Return normalized score components and final hybrid score.
 
@@ -41,6 +45,17 @@ def score_multimodal_components(
     place_score = _place_score(row, related_event, expanded_terms)
     override_boost = _override_boost(row, related_event)
     safety_penalty = _safety_penalty(row)
+    visual_match = has_visual_match(
+        embedding_score=embedding_score,
+        vlm_text_score=vlm_text_score,
+        ocr_score=ocr_score,
+        sql_score=sql_score,
+        matched_terms=matched_terms or [],
+        embedding_threshold=visual_match_embedding_threshold,
+    )
+    if not visual_match:
+        line_score = min(line_score, 0.2)
+        event_score = min(event_score, 0.2)
 
     final = (
         max(0.0, min(embedding_score, 1.0)) * 0.30
@@ -62,8 +77,11 @@ def score_multimodal_components(
         final = min(final, 0.44)
     if _people_present_only(row) and not has_context:
         final = min(final, 0.44)
+    if not visual_match:
+        final *= 0.5
 
     return {
+        "sql_score": round(max(0.0, min(sql_score, 1.0)), 3),
         "embedding_score": round(max(0.0, min(embedding_score, 1.0)), 3),
         "vlm_text_score": round(vlm_text_score, 3),
         "ocr_score": round(ocr_score, 3),
@@ -72,8 +90,30 @@ def score_multimodal_components(
         "place_score": round(place_score, 3),
         "override_boost": round(override_boost, 3),
         "safety_penalty": round(safety_penalty, 3),
+        "visual_match": 1.0 if visual_match else 0.0,
+        "visual_match_threshold": round(visual_match_embedding_threshold, 3),
         "final_score": round(max(0.0, min(final, 0.95)), 3),
     }
+
+
+def has_visual_match(
+    *,
+    embedding_score: float,
+    vlm_text_score: float,
+    ocr_score: float = 0.0,
+    sql_score: float = 0.0,
+    matched_terms: list[str] | None = None,
+    embedding_threshold: float = VISUAL_MATCH_EMBEDDING_THRESHOLD,
+) -> bool:
+    """Return whether an image result visibly matches the visual query itself."""
+
+    return bool(
+        vlm_text_score > 0
+        or ocr_score > 0
+        or sql_score > 0
+        or (matched_terms or [])
+        or embedding_score >= embedding_threshold
+    )
 
 
 def matched_terms_for_row(row: dict[str, Any], terms: list[str]) -> list[str]:

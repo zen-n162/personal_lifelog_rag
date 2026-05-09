@@ -37,6 +37,33 @@ cases:
     assert case["matched_dates"] == ["2024-12-24"]
 
 
+def test_multimodal_search_private_eval_accepts_expected_top_dates_any(tmp_path: Path) -> None:
+    repository = LifelogRepository(tmp_path / "lifelog.sqlite")
+    repository.initialize()
+    _seed_food_vlm(repository)
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text(
+        """
+cases:
+  - id: mm_food_any
+    type: multimodal_search
+    query: "ご飯を食べた写真"
+    expected_top_dates_any:
+      - "2024-12-07"
+      - "2024-12-24"
+    expected_min_results: 1
+""",
+        encoding="utf-8",
+    )
+
+    report = evaluate_private_questions(repository, load_private_eval_questions(questions_path))
+
+    case = report["case_results"][0]
+    assert case["status"] == "pass"
+    assert "2024-12-24" in case["matched_dates"]
+    assert case["expected_top_dates_any"] == ["2024-12-07", "2024-12-24"]
+
+
 def _seed_food_vlm(repository: LifelogRepository) -> None:
     repository.add_media_item(
         id="media_mm_private_eval_food",

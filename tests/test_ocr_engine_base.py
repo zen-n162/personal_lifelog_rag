@@ -4,7 +4,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from personal_lifelog_rag.ocr.engines import FakeOcrEngine, NoopOcrEngine, TesseractCliOcrEngine, get_ocr_engine
+from personal_lifelog_rag.ocr.config import OcrRuntimeConfig
+from personal_lifelog_rag.ocr.engines import (
+    FakeOcrEngine,
+    NoopOcrEngine,
+    PaddleOcrLocalEngine,
+    TesseractCliOcrEngine,
+    get_ocr_engine,
+)
 
 
 def test_fake_ocr_engine_returns_deterministic_result(tmp_path: Path) -> None:
@@ -43,3 +50,26 @@ def test_get_ocr_engine_supports_safe_defaults() -> None:
     assert get_ocr_engine("fake").name == "fake"
     assert get_ocr_engine("noop").name == "noop"
     assert get_ocr_engine("unknown_engine_name").name == "noop"
+
+
+def test_tesseract_engine_receives_runtime_config() -> None:
+    config = OcrRuntimeConfig(tesseract_cmd="custom-tesseract", psm=11, oem=3, max_text_length=123)
+
+    engine = get_ocr_engine("tesseract_cli", config=config)
+
+    assert isinstance(engine, TesseractCliOcrEngine)
+    assert engine.binary == "custom-tesseract"
+    assert engine.psm == 11
+    assert engine.oem == 3
+    assert engine.max_text_length == 123
+
+
+def test_paddleocr_local_skeleton_is_safe_without_models(tmp_path: Path) -> None:
+    image_path = tmp_path / "dummy.png"
+    Image.new("RGB", (8, 8), "white").save(image_path)
+    engine = PaddleOcrLocalEngine()
+
+    result = engine.recognize(image_path, ["jpn"])
+
+    assert engine.name == "paddleocr_local"
+    assert result.status == "engine_unavailable"

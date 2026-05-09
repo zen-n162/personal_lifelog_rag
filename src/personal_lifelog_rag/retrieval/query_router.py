@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
+from personal_lifelog_rag.embeddings.base import MultimodalEmbeddingEngine
 from personal_lifelog_rag.retrieval.answer_builder import build_answer
 from personal_lifelog_rag.retrieval.date_parser import parse_date_query
 from personal_lifelog_rag.retrieval.local_search import (
@@ -15,6 +16,7 @@ from personal_lifelog_rag.retrieval.local_search import (
 )
 from personal_lifelog_rag.embeddings.multimodal_search import format_multimodal_search, multimodal_search
 from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
+from personal_lifelog_rag.retrieval.monthly_summary import build_monthly_summary_report, format_monthly_summary
 from personal_lifelog_rag.retrieval.query_intent import QueryIntentResult, classify_query_intent
 from personal_lifelog_rag.retrieval.temporal_search import search_timeline
 from personal_lifelog_rag.line.call_index import format_search_calls_report, search_calls
@@ -65,6 +67,7 @@ def route_query(
     limit: int = 5,
     include_hidden: bool = False,
     multimodal_config: dict[str, Any] | None = None,
+    multimodal_engine: MultimodalEmbeddingEngine | None = None,
 ) -> RoutedQueryResult:
     intent_result = classify_query_intent(query, today=today)
     intent = intent_result.intent
@@ -100,6 +103,7 @@ def route_query(
                     include_hidden=include_hidden,
                     config=multimodal_config,
                 ),
+                engine=multimodal_engine,
             )
             return _routed(
                 intent_result,
@@ -161,7 +165,26 @@ def route_query(
             results=report["results"],
         )
 
-    if intent in {"time_range_summary", "event_summary", "location_summary"}:
+    if intent in {"monthly_summary", "time_range_summary"}:
+        start_date = intent_result.entities.get("date_from")
+        end_date = intent_result.entities.get("date_to")
+        if start_date and end_date:
+            report = build_monthly_summary_report(
+                repository,
+                start_date=str(start_date),
+                end_date=str(end_date),
+                include_hidden=include_hidden,
+                top_days_limit=5,
+                events_per_day=5,
+            )
+            return _routed(
+                intent_result,
+                routing="monthly-summary" if intent == "monthly_summary" else "time-range-summary",
+                answer=format_monthly_summary(report),
+                results=[report],
+            )
+
+    if intent in {"event_summary", "location_summary"}:
         rows = list_events_report(
             repository,
             start_date=intent_result.entities.get("date_from"),
@@ -190,6 +213,7 @@ def route_query(
                     include_hidden=include_hidden,
                     config=multimodal_config,
                 ),
+                engine=multimodal_engine,
             )
             return _routed(
                 intent_result,
@@ -208,6 +232,27 @@ def route_query(
             routing="photo-activity",
             answer=_format_photo_activity(rows),
             results=rows,
+        )
+
+    if intent in {"image_search", "multimodal_image_search", "food_photo_search", "place_photo_search"}:
+        report = multimodal_search(
+            repository,
+            _multimodal_options(
+                query=query,
+                date_from=intent_result.entities.get("date_from"),
+                date_to=intent_result.entities.get("date_to"),
+                limit=limit,
+                backend="hybrid",
+                include_hidden=include_hidden,
+                config=multimodal_config,
+            ),
+            engine=multimodal_engine,
+        )
+        return _routed(
+            intent_result,
+            routing="multimodal-search",
+            answer=_format_multimodal_image_answer(query, report),
+            results=report["results"],
         )
 
     return _routed(
@@ -343,12 +388,17 @@ def _format_photo_activity(rows: list[dict[str, Any]]) -> str:
 def _format_multimodal_image_answer(query: str, report: dict[str, Any]) -> str:
     if not report.get("results"):
         return format_multimodal_search(report)
-    dates = sorted({str(row.get("date") or "") for row in report["results"] if row.get("date")})
-    primary_date = dates[0] if dates else "該当日"
+    ranked_dates = _ranked_unique_dates(report["results"])
+    primary_date = ranked_dates[0] if ranked_dates else "該当日"
+    if len(ranked_dates) > 1:
+        summary_line = f"主な候補は {', '.join(ranked_dates[:3])} です。"
+    else:
+        summary_line = f"主な候補は {primary_date} です。"
     lines = [
         f"質問: {query}",
         "",
-        f"画像解析では、{primary_date}に食事または料理の可能性がある写真が見つかりました。",
+        f"画像解析では、{primary_date}に「{query}」に関連する可能性がある写真が見つかりました。",
+        summary_line,
         "これはQwen3-VLなどによるローカル画像解析の推定です。必要に応じて写真を確認してください。",
         "",
         "候補:",
@@ -359,6 +409,15 @@ def _format_multimodal_image_answer(query: str, report: dict[str, Any]) -> str:
         lines.append(f"- {row.get('date')} {str(row.get('captured_at') or '')[11:16]} / cues: {cue_text} / evidence_strength={row.get('evidence_strength')}")
     lines.extend(["", format_multimodal_search(report)])
     return "\n".join(lines)
+
+
+def _ranked_unique_dates(results: list[dict[str, Any]]) -> list[str]:
+    dates: list[str] = []
+    for row in results:
+        value = str(row.get("date") or "")
+        if value and value not in dates:
+            dates.append(value)
+    return dates
 
 
 def _no_records_message(intent_result: QueryIntentResult) -> str:

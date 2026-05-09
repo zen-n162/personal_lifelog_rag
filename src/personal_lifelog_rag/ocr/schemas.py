@@ -12,6 +12,7 @@ OcrStatus = Literal[
     "skipped",
     "failed",
     "no_text",
+    "no_text_detected",
     "engine_unavailable",
 ]
 

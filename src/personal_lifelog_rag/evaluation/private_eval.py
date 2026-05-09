@@ -62,6 +62,7 @@ class PrivateEvalQuestion:
     max_confidence_for_activity: str | None = None
     intent: str | None = None
     expected_top_dates: list[str] = field(default_factory=list)
+    expected_top_dates_any: list[str] = field(default_factory=list)
     expected_classification: dict[str, str] = field(default_factory=dict)
     expected_evidence_keywords: list[str] = field(default_factory=list)
     should_downrank_phrases: list[str] = field(default_factory=list)
@@ -77,6 +78,8 @@ class PrivateEvalQuestion:
     expected_date_any: list[str] = field(default_factory=list)
     expected_sender_any: list[str] = field(default_factory=list)
     date: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
     expected_max_events: int | None = None
     max_line_only_low_value_events: int | None = None
     min_photo_and_line_events: int | None = None
@@ -95,7 +98,10 @@ class PrivateEvalQuestion:
     expected_media_ids: list[str] = field(default_factory=list)
     should_exclude_media_ids: list[str] = field(default_factory=list)
     expected_min_ocr_success: int | None = None
+    expected_min_ocr_processed: int | None = None
+    allow_engine_unavailable: bool = False
     expected_min_vlm_success: int | None = None
+    max_failed_vlm_rows: int | None = None
     expected_engine: str | None = None
     allowed_safety_flags: list[str] = field(default_factory=list)
     forbidden_terms: list[str] = field(default_factory=list)
@@ -165,6 +171,7 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
                 ),
                 intent=_none_or_str(row.get("intent")),
                 expected_top_dates=_string_list(row.get("expected_top_dates")),
+                expected_top_dates_any=_string_list(row.get("expected_top_dates_any")),
                 expected_classification=_string_dict(row.get("expected_classification")),
                 expected_evidence_keywords=_string_list(row.get("expected_evidence_keywords")),
                 should_downrank_phrases=_string_list(row.get("should_downrank_phrases")),
@@ -180,6 +187,8 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
                 expected_date_any=_string_list(row.get("expected_date_any")),
                 expected_sender_any=_string_list(row.get("expected_sender_any")),
                 date=_none_or_str(row.get("date")),
+                date_from=_none_or_str(row.get("date_from", row.get("from"))),
+                date_to=_none_or_str(row.get("date_to", row.get("to"))),
                 max_line_only_low_value_events=_none_or_int(row.get("max_line_only_low_value_events")),
                 min_photo_and_line_events=_none_or_int(row.get("min_photo_and_line_events")),
                 no_orphan_evidence=_none_or_bool(row.get("no_orphan_evidence")),
@@ -197,7 +206,10 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
                 expected_media_ids=_string_list(row.get("expected_media_ids")),
                 should_exclude_media_ids=_string_list(row.get("should_exclude_media_ids")),
                 expected_min_ocr_success=_none_or_int(row.get("expected_min_ocr_success")),
+                expected_min_ocr_processed=_none_or_int(row.get("expected_min_ocr_processed")),
+                allow_engine_unavailable=bool(row.get("allow_engine_unavailable", False)),
                 expected_min_vlm_success=_none_or_int(row.get("expected_min_vlm_success")),
+                max_failed_vlm_rows=_none_or_int(row.get("max_failed_vlm_rows")),
                 expected_engine=_none_or_str(row.get("expected_engine")),
                 allowed_safety_flags=_string_list(row.get("allowed_safety_flags")),
                 forbidden_terms=_string_list(row.get("forbidden_terms")),
@@ -454,6 +466,8 @@ def _evaluate_one(
         return _evaluate_query_intent_case(question)
     if question.case_type == "routed_qa":
         return _evaluate_routed_qa_case(repository, question)
+    if question.case_type in {"time_range_summary", "monthly_summary"}:
+        return _evaluate_time_range_summary_case(repository, question)
     if question.case_type == "call_search":
         return _evaluate_call_search_case(repository, question)
     if question.case_type == "event_quality":
@@ -468,6 +482,8 @@ def _evaluate_one(
         return _evaluate_vlm_review_case(repository, question)
     if question.case_type == "ocr_quality":
         return _evaluate_ocr_quality_case(repository, question)
+    if question.case_type == "ocr_search":
+        return _evaluate_ocr_search_case(repository, question)
     if question.case_type == "vlm_quality":
         return _evaluate_vlm_quality_case(repository, question)
     if question.case_type == "vlm_safety":
@@ -678,7 +694,7 @@ def _evaluate_keyword_search_case(repository, question: PrivateEvalQuestion) -> 
 def _evaluate_query_intent_case(question: PrivateEvalQuestion) -> dict[str, Any]:
     result = classify_query_intent(question.question)
     issues: list[str] = []
-    if question.expected_intent and result.intent != question.expected_intent:
+    if question.expected_intent and not _intent_matches(result.intent, question.expected_intent):
         issues.append(f"intent mismatch: {result.intent} != {question.expected_intent}")
     missing_entities = _missing_expected_entities(result.entities, question.expected_entities)
     if missing_entities:
@@ -707,7 +723,7 @@ def _evaluate_routed_qa_case(repository, question: PrivateEvalQuestion) -> dict[
     result_dates = _dates_from_routed_results(results)
     evidence_text = routed.answer + "\n" + json.dumps(_compact_results(results), ensure_ascii=False)
     issues: list[str] = []
-    if question.expected_intent and routed.intent != question.expected_intent:
+    if question.expected_intent and not _intent_matches(routed.intent, question.expected_intent):
         issues.append(f"intent mismatch: {routed.intent} != {question.expected_intent}")
     if question.expected_top_dates:
         top_dates = result_dates[: max(len(question.expected_top_dates), 1)]
@@ -737,6 +753,61 @@ def _evaluate_routed_qa_case(repository, question: PrivateEvalQuestion) -> dict[
             "routing": routed.routing,
             "top_dates": result_dates[:5],
             "classifications": {str(row.get("date")): row.get("classification") for row in results if row.get("date")},
+        },
+    )
+
+
+def _evaluate_time_range_summary_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    routed = route_query(repository, question.question, limit=10)
+    report = routed.results[0] if routed.results and isinstance(routed.results[0], dict) else {}
+    representative_days = list(report.get("representative_days") or [])
+    result_dates = [str(row.get("date")) for row in representative_days if row.get("date")]
+    evidence_types = _summary_evidence_types(report)
+    issues: list[str] = []
+    if routed.routing not in {"monthly-summary", "time-range-summary"}:
+        issues.append(f"unexpected routing: {routed.routing}")
+    if question.case_type == "monthly_summary" and routed.intent != "monthly_summary":
+        issues.append(f"intent mismatch: {routed.intent} != monthly_summary")
+    events_count = int(report.get("events_count") or 0)
+    if question.min_events is not None and events_count < question.min_events:
+        issues.append(f"events below expected_min_events: {events_count} < {question.min_events}")
+    if question.expected_max_events is not None and events_count > question.expected_max_events:
+        issues.append(f"events above expected_max_events: {events_count} > {question.expected_max_events}")
+    missing_evidence = [item for item in question.expected_evidence_types if item not in evidence_types]
+    if missing_evidence:
+        issues.append("missing expected evidence types: " + ", ".join(missing_evidence))
+    expected_dates = question.expected_top_dates or question.expected_dates
+    if expected_dates:
+        top_dates = result_dates[: max(len(expected_dates), 1)]
+        missing_dates = [date for date in expected_dates if date not in top_dates]
+        if missing_dates:
+            issues.append("expected top dates not in summary results: " + ", ".join(missing_dates))
+    forbidden_found = _forbidden_claims_found(routed.answer, question.forbidden_claims)
+    if forbidden_found:
+        issues.append("forbidden claims found: " + ", ".join(forbidden_found))
+
+    media = report.get("media") or {}
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        matched_dates=[date for date in expected_dates if date in result_dates[:5]],
+        events_count=events_count,
+        event_evidence_count=int(report.get("event_evidence_count") or 0),
+        line_message_count=int(report.get("line_messages_count") or 0),
+        photo_count=int(media.get("photos") or 0),
+        gps_photo_count=int(media.get("gps_photos") or 0),
+        forbidden_claims_found=forbidden_found,
+        answer_preview=redact_text(routed.answer, max_chars=240),
+        extra={
+            "intent": routed.intent,
+            "intent_confidence": routed.intent_confidence,
+            "routing": routed.routing,
+            "top_dates": result_dates[:5],
+            "evidence_types": sorted(evidence_types),
+            "category_counts": report.get("category_counts") or {},
+            "confidence_distribution": report.get("confidence_distribution") or {},
+            "missing_expected_evidence_types": missing_evidence,
         },
     )
 
@@ -1005,10 +1076,16 @@ def _evaluate_ocr_quality_case(repository, question: PrivateEvalQuestion) -> dic
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
     success_count = status_counts.get("success", 0)
+    processed_count = len(rows)
+    engine_unavailable_count = status_counts.get("engine_unavailable", 0)
     issues: list[str] = []
     if question.expected_min_ocr_success is not None and success_count < question.expected_min_ocr_success:
         issues.append(
             f"OCR success below expected_min_ocr_success: {success_count} < {question.expected_min_ocr_success}"
+        )
+    if question.expected_min_ocr_processed is not None and processed_count < question.expected_min_ocr_processed:
+        issues.append(
+            f"OCR processed below expected_min_ocr_processed: {processed_count} < {question.expected_min_ocr_processed}"
         )
     missing_evidence = []
     if "ocr" in {item.lower() for item in question.expected_evidence_types} and success_count == 0:
@@ -1025,18 +1102,63 @@ def _evaluate_ocr_quality_case(repository, question: PrivateEvalQuestion) -> dic
         extra={
             "date": target_date,
             "ocr_status_counts": dict(sorted(status_counts.items())),
+            "ocr_processed_count": processed_count,
             "ocr_success_count": success_count,
             "expected_min_ocr_success": question.expected_min_ocr_success,
+            "expected_min_ocr_processed": question.expected_min_ocr_processed,
+            "allow_engine_unavailable": question.allow_engine_unavailable,
             "missing_expected_evidence_types": missing_evidence,
         },
     )
 
 
+def _evaluate_ocr_search_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    query = question.query or question.question
+    rows = repository.list_media_ocr(
+        start_date=question.date_from,
+        end_date=question.date_to or question.date_from,
+        statuses=["success"],
+        keyword=query,
+        limit=100,
+    )
+    issues: list[str] = []
+    if question.expected_min_results is not None and len(rows) < question.expected_min_results:
+        issues.append(f"OCR search results below expected_min_results: {len(rows)} < {question.expected_min_results}")
+    matched_dates = sorted(
+        {
+            str(row.get("captured_at") or row.get("fallback_captured_at") or "")[:10]
+            for row in rows
+            if str(row.get("captured_at") or row.get("fallback_captured_at") or "")[:10]
+        }
+    )
+    for expected_date in question.expected_top_dates:
+        if expected_date not in matched_dates[:5]:
+            issues.append(f"expected date not in OCR search top dates: {expected_date}")
+    preview = [
+        {
+            "media_id": row.get("media_id"),
+            "date": str(row.get("captured_at") or row.get("fallback_captured_at") or "")[:10],
+            "text": redact_text(row.get("ocr_text_redacted") or row.get("ocr_text"), max_chars=80),
+        }
+        for row in rows[:5]
+    ]
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        matched_dates=matched_dates[:5],
+        answer_preview=redact_text(json.dumps(preview, ensure_ascii=False), max_chars=240),
+        extra={"query": query, "result_count": len(rows), "preview": preview},
+    )
+
+
 def _evaluate_vlm_quality_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
     target_date = question.date or question.expected_date or (question.expected_dates[0] if question.expected_dates else None)
-    if not target_date:
-        return _skip_case(question, "vlm_quality requires date")
-    rows = repository.list_media_vlm(start_date=target_date, end_date=target_date, limit=100_000)
+    start_date = target_date or question.date_from
+    end_date = target_date or question.date_to or start_date
+    if not start_date:
+        return _skip_case(question, "vlm_quality requires date or date_from/date_to")
+    rows = repository.list_media_vlm(start_date=start_date, end_date=end_date, limit=100_000)
     status_counts: dict[str, int] = {}
     searchable_text_parts: list[str] = []
     safety_flag_counts: dict[str, int] = {}
@@ -1081,7 +1203,10 @@ def _evaluate_vlm_quality_case(repository, question: PrivateEvalQuestion) -> dic
         issues.append(f"success VLM rows with empty caption: {empty_success_caption_count}")
     failed_count = status_counts.get("failed", 0)
     engine_unavailable_count = status_counts.get("engine_unavailable", 0)
-    if failed_count:
+    if question.max_failed_vlm_rows is not None:
+        if failed_count > question.max_failed_vlm_rows:
+            issues.append(f"failed VLM rows above max_failed_vlm_rows: {failed_count} > {question.max_failed_vlm_rows}")
+    elif failed_count:
         issues.append(f"failed VLM rows found: {failed_count}")
     if engine_unavailable_count:
         issues.append(f"engine_unavailable VLM rows found: {engine_unavailable_count}")
@@ -1099,15 +1224,19 @@ def _evaluate_vlm_quality_case(repository, question: PrivateEvalQuestion) -> dic
         question,
         status="pass" if not issues else "fail",
         issues=issues,
-        matched_dates=[target_date],
+        matched_dates=[value for value in (target_date, start_date) if value],
         photo_count=len(rows),
         forbidden_claims_found=forbidden_found,
         answer_preview=redact_text(json.dumps(status_counts, ensure_ascii=False), max_chars=240),
         extra={
             "date": target_date,
+            "date_from": start_date,
+            "date_to": end_date,
             "vlm_status_counts": dict(sorted(status_counts.items())),
             "vlm_success_count": success_count,
             "expected_min_vlm_success": question.expected_min_vlm_success,
+            "max_failed_vlm_rows": question.max_failed_vlm_rows,
+            "failed_vlm_rows": failed_count,
             "success_engines": dict(sorted(success_engines.items())),
             "expected_engine": question.expected_engine,
             "safety_flag_counts": dict(sorted(safety_flag_counts.items())),
@@ -1176,6 +1305,8 @@ def _evaluate_image_search_case(repository, question: PrivateEvalQuestion) -> di
     issues: list[str] = []
     if question.expected_min_results is not None and len(results) < question.expected_min_results:
         issues.append(f"results below expected_min_results: {len(results)} < {question.expected_min_results}")
+    if question.expected_top_dates_any and not any(date in result_dates[:5] for date in question.expected_top_dates_any):
+        issues.append("none of expected_top_dates_any found in top5: " + ", ".join(question.expected_top_dates_any))
     expected_dates = question.expected_top_dates or question.expected_dates
     if expected_dates and not any(date in result_dates[:5] for date in expected_dates):
         issues.append("expected image search dates missing: " + ", ".join(expected_dates))
@@ -1203,12 +1334,13 @@ def _evaluate_image_search_case(repository, question: PrivateEvalQuestion) -> di
         question,
         status="pass" if not issues else "fail",
         issues=issues,
-        matched_dates=[date for date in expected_dates if date in result_dates],
+        matched_dates=[date for date in [*expected_dates, *question.expected_top_dates_any] if date in result_dates[:5]],
         photo_count=len(results),
         forbidden_claims_found=forbidden,
         answer_preview=redact_text(answer_text, max_chars=240),
         extra={
             "top_dates": result_dates[:5],
+            "expected_top_dates_any": question.expected_top_dates_any,
             "results_count": len(results),
             "top_media_ids": result_media_ids[:5],
         },
@@ -1230,6 +1362,8 @@ def _evaluate_multimodal_search_case(repository, question: PrivateEvalQuestion) 
     issues: list[str] = []
     if question.expected_min_results is not None and len(results) < question.expected_min_results:
         issues.append(f"results below expected_min_results: {len(results)} < {question.expected_min_results}")
+    if question.expected_top_dates_any and not any(date in result_dates[:5] for date in question.expected_top_dates_any):
+        issues.append("none of expected_top_dates_any found in top5: " + ", ".join(question.expected_top_dates_any))
     expected_dates = question.expected_top_dates or question.expected_dates
     if expected_dates and not any(date in result_dates[:5] for date in expected_dates):
         issues.append("expected multimodal dates missing: " + ", ".join(expected_dates))
@@ -1273,12 +1407,13 @@ def _evaluate_multimodal_search_case(repository, question: PrivateEvalQuestion) 
         question,
         status="pass" if not issues else "fail",
         issues=issues,
-        matched_dates=[date for date in expected_dates if date in result_dates],
+        matched_dates=[date for date in [*expected_dates, *question.expected_top_dates_any] if date in result_dates[:5]],
         photo_count=len(results),
         forbidden_claims_found=forbidden,
         answer_preview=redact_text(answer_text, max_chars=240),
         extra={
             "top_dates": result_dates[:5],
+            "expected_top_dates_any": question.expected_top_dates_any,
             "results_count": len(results),
             "evidence_strengths": [row.get("evidence_strength") for row in results[:5]],
         },
@@ -1311,6 +1446,7 @@ def _generic_case(
         "matched_dates": matched_dates or [],
         "expected_date": question.expected_date,
         "expected_dates": question.expected_dates,
+        "expected_top_dates_any": question.expected_top_dates_any,
         "expected_date_match": not question.expected_dates or bool(matched_dates),
         "events_count": events_count,
         "event_evidence_count": event_evidence_count,
@@ -1344,6 +1480,12 @@ def _missing_expected_entities(actual: dict[str, Any], expected: dict[str, str])
         if not ok:
             missing.append(f"{key}={expected_value} (actual={actual_value})")
     return missing
+
+
+def _intent_matches(actual: str, expected: str) -> bool:
+    if actual == expected:
+        return True
+    return {actual, expected} == {"monthly_summary", "time_range_summary"}
 
 
 def _dates_from_routed_results(results: list[dict[str, Any]]) -> list[str]:
@@ -1400,6 +1542,22 @@ def _event_evidence_types(repository, events: list[dict[str, Any]]) -> set[str]:
     for event in events:
         for evidence in repository.list_event_evidence(str(event["id"])):
             evidence_types.add(str(evidence.get("evidence_type")))
+    return evidence_types
+
+
+def _summary_evidence_types(report: dict[str, Any]) -> set[str]:
+    evidence_types = {str(key) for key, value in (report.get("evidence_type_counts") or {}).items() if int(value or 0) > 0}
+    media = report.get("media") or {}
+    if int(media.get("photos") or 0) > 0:
+        evidence_types.add("photo")
+    if int(media.get("vlm_success_photos") or 0) > 0:
+        evidence_types.add("vlm")
+    if int(media.get("ocr_success_photos") or 0) > 0:
+        evidence_types.add("ocr")
+    if int(report.get("line_messages_count") or 0) > 0:
+        evidence_types.add("line")
+    if int(report.get("call_events_count") or 0) > 0:
+        evidence_types.add("call")
     return evidence_types
 
 
@@ -1477,14 +1635,14 @@ def _by_type_summary(cases: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
 def _ranking_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
     ranked_cases = [
         case for case in cases
-        if case.get("expected_dates") or case.get("expected_top_dates")
+        if case.get("expected_dates") or case.get("expected_top_dates") or case.get("expected_top_dates_any")
     ]
     if not ranked_cases:
         return {"top1_accuracy": None, "expected_date_recall_at_5": None, "evaluated_cases": 0}
     top1_hits = 0
     recall_hits = 0
     for case in ranked_cases:
-        expected = list(case.get("expected_top_dates") or case.get("expected_dates") or [])
+        expected = list(case.get("expected_top_dates") or case.get("expected_dates") or case.get("expected_top_dates_any") or [])
         top_dates = list(case.get("top_dates") or case.get("matched_dates") or [])
         if expected and top_dates and top_dates[0] in expected:
             top1_hits += 1

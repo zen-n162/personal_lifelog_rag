@@ -61,6 +61,13 @@ cases:
     type: ocr_quality
     date: "2099-01-01"
     expected_min_ocr_success: 0
+    expected_min_ocr_processed: 0
+    allow_engine_unavailable: true
+
+  - id: dummy_ocr_search_001
+    type: ocr_search
+    query: "receipt"
+    expected_min_results: 0
 
   - id: dummy_image_search_001
     type: image_search
@@ -108,3 +115,5 @@ cases:
   - id: dummy_event_override_001
     type: event_override
     event_id: "dummy_event_id"
+
+  

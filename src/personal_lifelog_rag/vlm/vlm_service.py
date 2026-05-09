@@ -17,7 +17,7 @@ from personal_lifelog_rag.vlm.prompts import (
     SAFE_IMAGE_ANALYSIS_PROMPT_VERSION,
     get_vlm_prompt_template,
 )
-from personal_lifelog_rag.vlm.safety import sanitize_vlm_result
+from personal_lifelog_rag.vlm.safety import result_from_payload, safe_json_object, sanitize_vlm_result
 from personal_lifelog_rag.vlm.review_service import apply_vlm_override_to_result, should_use_vlm_for_search
 from personal_lifelog_rag.vlm.schemas import ImageSearchOptions, VlmImagesReport, VlmResult
 
@@ -40,6 +40,7 @@ class VlmImagesOptions:
     only_gps: bool = False
     prompt_template: str | None = None
     media_ids: list[str] | None = None
+    failed_only: bool = False
 
 
 def run_vlm_images(
@@ -339,7 +340,7 @@ def format_image_search(report: dict[str, Any]) -> str:
 
 def _save_result(repository, media_row: dict[str, Any], result: VlmResult) -> None:
     repository.upsert_media_vlm(
-        media_id=str(media_row["id"]),
+        media_id=str(media_row.get("id") or media_row.get("media_id")),
         caption=result.caption if result.status == "success" else None,
         short_caption=result.short_caption if result.status == "success" else None,
         scene_tags=result.scene_tags,
@@ -363,6 +364,104 @@ def _save_result(repository, media_row: dict[str, Any], result: VlmResult) -> No
     )
 
 
+def recover_failed_vlm_json_rows(
+    repository,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 20,
+    engine: str | None = None,
+) -> dict[str, Any]:
+    """Recover failed VLM rows from stored raw_output_head snippets when possible."""
+
+    rows = repository.list_media_vlm(
+        start_date=start_date,
+        end_date=end_date,
+        statuses=["failed"],
+        limit=1_000_000,
+    )
+    if engine:
+        rows = [row for row in rows if str(row.get("vlm_engine") or "") == engine]
+    rows = rows[: max(limit, 0)]
+    recovered = 0
+    unrecovered = 0
+    output_rows: list[dict[str, Any]] = []
+    for row in rows:
+        media_id = str(row.get("media_id") or "")
+        raw_output = _raw_output_head_from_error(row.get("error_message"))
+        if not raw_output:
+            unrecovered += 1
+            output_rows.append({"media_id": media_id, "status": "unrecovered", "reason": "raw_output_head missing"})
+            continue
+        payload = safe_json_object(raw_output)
+        if payload.get("_parse_error"):
+            unrecovered += 1
+            output_rows.append({"media_id": media_id, "status": "unrecovered", "reason": payload["_parse_error"]})
+            continue
+        result = result_from_payload(
+            payload,
+            engine=str(row.get("vlm_engine") or "unknown"),
+            model_name=row.get("model_name"),
+            prompt_version=str(row.get("prompt_version") or SAFE_IMAGE_ANALYSIS_PROMPT_VERSION),
+        )
+        flags = list(result.safety_flags)
+        if "json_repaired" not in flags:
+            flags.append("json_repaired")
+        result = VlmResult(
+            **{
+                **result.to_dict(),
+                "safety_flags": flags,
+                "raw": {
+                    **result.raw,
+                    "recovered_from_error_message": True,
+                    "raw_output_head": raw_output[:1000],
+                },
+            }
+        )
+        _save_result(repository, row, result)
+        recovered += 1
+        output_rows.append({"media_id": media_id, "status": "recovered", "caption": redact_text(result.caption, max_chars=100)})
+    return {
+        "selected_failed_rows": len(rows),
+        "recovered": recovered,
+        "unrecovered": unrecovered,
+        "remaining_failed_hint": max(0, len(repository.list_media_vlm(start_date=start_date, end_date=end_date, statuses=["failed"], limit=1_000_000))),
+        "rows": output_rows,
+    }
+
+
+def format_recover_failed_vlm_report(report: dict[str, Any]) -> str:
+    lines = [
+        "Retry VLM failed",
+        "",
+        f"- selected failed rows: {report['selected_failed_rows']}",
+        f"- recovered from stored raw output: {report['recovered']}",
+        f"- unrecovered: {report['unrecovered']}",
+        f"- remaining failed rows in range: {report['remaining_failed_hint']}",
+    ]
+    for row in report.get("rows", [])[:20]:
+        lines.append(f"- {row.get('media_id')}: {row.get('status')} {row.get('reason') or row.get('caption') or ''}".rstrip())
+    return "\n".join(lines)
+
+
+def _raw_output_head_from_error(error_message: Any) -> str | None:
+    text = str(error_message or "")
+    marker = "raw_output_head:"
+    index = text.find(marker)
+    if index < 0:
+        return None
+    tail = text[index + len(marker) :]
+    for next_marker in ("\nprompt_template:", "\nimage_input_mode:", "\ntraceback_tail:"):
+        marker_index = tail.find(next_marker)
+        if marker_index >= 0:
+            tail = tail[:marker_index]
+            break
+    raw = tail.strip()
+    if raw.endswith("…"):
+        raw = raw[:-1].rstrip()
+    return raw or None
+
+
 def _filter_targets(repository, rows: list[dict[str, Any]], options: VlmImagesOptions) -> list[dict[str, Any]]:
     media_id_order: dict[str, int] | None = None
     if options.media_ids is not None:
@@ -377,6 +476,10 @@ def _filter_targets(repository, rows: list[dict[str, Any]], options: VlmImagesOp
         if options.only_with_ocr:
             ocr = repository.get_media_ocr(str(row["id"]))
             if not ocr or ocr.get("status") != "success":
+                continue
+        if options.failed_only:
+            existing = repository.get_media_vlm(str(row["id"]))
+            if not existing or str(existing.get("status") or "") != "failed":
                 continue
         filtered.append(row)
     if media_id_order is not None:

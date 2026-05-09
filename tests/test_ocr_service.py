@@ -85,6 +85,20 @@ def test_ocr_stats_returns_counts(tmp_path: Path) -> None:
     assert stats["ocr_done_photos"] == 1
     assert stats["status_counts"]["success"] == 1
     assert stats["text_present_count"] == 1
+    assert "text_length_distribution" in stats
+
+
+def test_no_text_detected_status_is_counted(tmp_path: Path) -> None:
+    repository = _repository_with_image(tmp_path)
+
+    report = run_ocr_images(
+        repository,
+        OcrImagesOptions(start_date="2024-12-24", end_date="2024-12-24", limit=10),
+        engine=FakeOcrEngine(default_text=""),
+    )
+
+    assert report.no_text == 1
+    assert repository.get_media_ocr("media_service")["status"] == "no_text"
 
 
 def _repository_with_image(tmp_path: Path) -> LifelogRepository:

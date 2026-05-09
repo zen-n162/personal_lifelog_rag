@@ -46,6 +46,9 @@ PLAN_TERMS = (
     "行きたい",
     "行くかも",
     "行けたら",
+    "行くなら",
+    "着いたら",
+    "着くなら",
     "候補",
     "どっか",
     "じゃないかな",
@@ -56,11 +59,25 @@ PLAN_TERMS = (
     "見とく",
     "探す",
     "あるとしたら",
+    "かも",
     "かもしれない",
+    "かな",
     "かなー",
     "何食べたい",
     "ご飯どうしよ",
     "どこ行く",
+)
+CONDITIONAL_ACTUAL_PATTERNS = (
+    "着いたら",
+    "着くなら",
+    "行けたら",
+    "行くなら",
+    "あるとしたら",
+    "かも",
+    "かな",
+    "どっか",
+    "候補",
+    "予定",
 )
 MISSED_CALL_TERMS = ("応答がありませんでした", "不在着信", "不在", "キャンセル")
 
@@ -108,7 +125,10 @@ def classify_day_evidence(
     )
     max_call_duration = int(call_summary.get("max_duration_sec") or 0)
 
-    actual_hits = _matched_terms(text_blob, _actual_terms_for_intent(intent))
+    actual_hits = _filter_conditional_actual_hits(
+        _matched_terms(text_blob, _actual_terms_for_intent(intent)),
+        text_blob,
+    )
     plan_hits = _matched_terms(text_blob, PLAN_TERMS)
     missed_call_hits = _matched_terms(text_blob, MISSED_CALL_TERMS)
     event_actual = [
@@ -353,6 +373,25 @@ def _matched_terms(text: str, terms: tuple[str, ...]) -> list[str]:
         if term and term in text and term not in seen:
             seen.append(term)
     return seen
+
+
+def _filter_conditional_actual_hits(actual_hits: list[str], text: str) -> list[str]:
+    """Avoid treating conditional place talk like "着いたら" as arrival evidence."""
+
+    if not actual_hits or not any(pattern in text for pattern in CONDITIONAL_ACTUAL_PATTERNS):
+        return actual_hits
+    filtered: list[str] = []
+    for hit in actual_hits:
+        if hit == "着いた" and "着いたら" in text:
+            continue
+        if hit == "着く" and any(pattern in text for pattern in ("着いたら", "着くなら")):
+            continue
+        if hit in {"いる", "来た", "待って", "待ってる", "向かってる"} and any(
+            pattern in text for pattern in ("かも", "かな", "どっか", "候補", "予定", "行けたら", "行くなら")
+        ):
+            continue
+        filtered.append(hit)
+    return filtered
 
 
 def _multi_evidence_bonus(day_result: dict[str, Any], same_day_photo_count: int) -> float:

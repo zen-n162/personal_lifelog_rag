@@ -10,7 +10,7 @@ from personal_lifelog_rag.core.privacy import redact_text
 from personal_lifelog_rag.db.repository import LifelogRepository
 from personal_lifelog_rag.embeddings.base import MultimodalEmbeddingEngine
 from personal_lifelog_rag.embeddings.engines import (
-    get_multimodal_embedding_engine,
+    get_cached_multimodal_embedding_engine,
     infer_query_engine_from_records,
 )
 from personal_lifelog_rag.embeddings.repository import MediaEmbeddingRepository, embedding_vector
@@ -152,7 +152,7 @@ def _query_engine(
     embedding_rows: list[dict[str, Any]],
 ) -> MultimodalEmbeddingEngine:
     if options.engine_name or options.model_name or options.model_path:
-        return get_multimodal_embedding_engine(
+        return get_cached_multimodal_embedding_engine(
             options.engine_name,
             model_name=options.model_name,
             model_path=options.model_path,
@@ -246,6 +246,7 @@ def _merge_candidate(
     timestamp = str(row.get("captured_at") or row.get("fallback_captured_at") or "")
     date_value = timestamp[:10]
     expanded_terms = expand_visual_query_terms(query)
+    matching_terms = _matched_terms(row, sql_candidate.get("expanded_terms") or expanded_terms)
     related_event = _related_event(repository, media_id, date_value, include_hidden=include_hidden)
     line_matches = _line_matches(repository, query, date_value, expanded_terms=expanded_terms)
     evidence_types = _evidence_types(row, embedding_candidate, related_event=related_event, line_matches=line_matches)
@@ -255,14 +256,15 @@ def _merge_candidate(
         embedding_score=float(embedding_candidate.get("embedding_score") or 0.0),
         related_event=related_event,
         line_matches=line_matches,
+        sql_score=float(sql_candidate.get("sql_score") or 0.0),
+        matched_terms=matching_terms,
     )
-    # Preserve the VLM SQL fallback score as an observable component without
-    # double-counting it in the final weighted ranker.
-    score_components["sql_score"] = round(float(sql_candidate.get("sql_score") or 0.0), 3)
+    visual_match = bool(score_components.get("visual_match"))
     strength = compute_multimodal_evidence_strength(
         evidence_types=evidence_types,
         verified_event=bool((related_event or {}).get("is_verified")),
         pinned_event=bool((related_event or {}).get("is_pinned")),
+        visual_match=visual_match,
     )
     safety_flags = _json_list(row.get("safety_flags_json"))
     return {
@@ -279,7 +281,7 @@ def _merge_candidate(
             has_embedding=bool(embedding_candidate),
             expanded_terms=sql_candidate.get("expanded_terms") or expanded_terms,
         ),
-        "matched_terms": _matched_terms(row, sql_candidate.get("expanded_terms") or expanded_terms),
+        "matched_terms": matching_terms,
         "related_event": _event_label(related_event),
         "related_event_id": (related_event or {}).get("id"),
         "line_samples": line_matches[:5],
@@ -289,7 +291,12 @@ def _merge_candidate(
         "activity_tags": _json_list(row.get("activity_tags_json")),
         "food_cues": _json_list(row.get("food_cues_json")),
         "location_cues": _json_list(row.get("location_cues_json")),
-        "confidence_label": _confidence_label(score_components["final_score"], evidence_types=evidence_types, safety_flags=safety_flags),
+        "confidence_label": _confidence_label(
+            score_components["final_score"],
+            evidence_types=evidence_types,
+            safety_flags=safety_flags,
+            visual_match=visual_match,
+        ),
         "score_components": score_components,
         "reasons": _reasons(row, score_components, related_event, line_matches, evidence_types),
         "review_status": row.get("review_status") or "unreviewed",
@@ -306,7 +313,10 @@ def compute_multimodal_evidence_strength(
     evidence_types: list[str],
     verified_event: bool = False,
     pinned_event: bool = False,
+    visual_match: bool = True,
 ) -> str:
+    if not visual_match:
+        return "weak"
     return compute_evidence_strength(
         evidence_types,
         verified_event=verified_event,
@@ -519,5 +529,14 @@ def _json_list(raw: Any) -> list[str]:
     return [str(parsed)] if str(parsed).strip() else []
 
 
-def _confidence_label(score: float, *, evidence_types: list[str], safety_flags: list[str] | None = None) -> str:
-    return confidence_label_for_score(score, evidence_types=evidence_types, safety_flags=safety_flags)
+def _confidence_label(
+    score: float,
+    *,
+    evidence_types: list[str],
+    safety_flags: list[str] | None = None,
+    visual_match: bool = True,
+) -> str:
+    label = confidence_label_for_score(score, evidence_types=evidence_types, safety_flags=safety_flags)
+    if not visual_match:
+        return "低"
+    return label
