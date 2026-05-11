@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any
 
 from personal_lifelog_rag.places.schemas import Place
+from personal_lifelog_rag.places.location_store import location_place_stats
 
 
 def place_stats(
@@ -59,7 +60,7 @@ def place_stats(
         for event in events
         if event.get("gps_lat") is not None and event.get("gps_lon") is not None
     )
-    return {
+    report = {
         "range": {"from": start_date, "to": end_date},
         "total_events": len(events),
         "location_counts": dict(location_counter.most_common()),
@@ -72,6 +73,11 @@ def place_stats(
             for name, count in location_counter.most_common(20)
         ],
     }
+    try:
+        report["location_db"] = location_place_stats(repository)
+    except Exception:
+        report["location_db"] = {}
+    return report
 
 
 def format_place_stats(report: dict[str, Any]) -> str:
@@ -83,6 +89,11 @@ def format_place_stats(report: dict[str, Any]) -> str:
         f"- sensitive表示名イベント: {report['sensitive_location_event_count']}",
         f"- photo evidence付きイベント: {report['photo_evidence_event_count']}",
         f"- GPS付きイベント: {report['gps_event_count']}",
+        f"- location_points: {report.get('location_db', {}).get('location_points', 0)}",
+        f"- place_clusters: {report.get('location_db', {}).get('place_clusters', 0)}",
+        f"- places: {report.get('location_db', {}).get('places', 0)}",
+        f"- event_places: {report.get('location_db', {}).get('event_places', 0)}",
+        f"- media_places: {report.get('location_db', {}).get('media_places', 0)}",
         "",
         "Location counts:",
     ]

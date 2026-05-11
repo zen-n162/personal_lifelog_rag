@@ -117,7 +117,7 @@ def _pinned_boost(row: dict[str, Any]) -> float:
 
 
 def _verified_boost(row: dict[str, Any]) -> float:
-    return 0.04 if any(event.get("is_verified") for event in row.get("events") or []) else 0.0
+    return 0.04 if any(event.get("is_verified") or event.get("place_manual_verified") for event in row.get("events") or []) else 0.0
 
 
 def _confidence_from_score(score: float) -> float:

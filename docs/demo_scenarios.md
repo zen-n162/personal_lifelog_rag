@@ -123,3 +123,21 @@ Suggested flow:
 
 The UI must remain bound to localhost, with sharing disabled.
 
+## Demo 6: Manual Person and Place QA
+
+Use anonymized labels in demos:
+
+```bash
+python -m personal_lifelog_rag.app.cli qa "人物AとLINEした日は？"
+python -m personal_lifelog_rag.app.cli qa "人物Aが写っている写真はいつ？"
+python -m personal_lifelog_rag.app.cli qa "人物Aと新宿に行ったのはいつ？"
+```
+
+What to show:
+
+- Person names come from manual labels only.
+- LINE speaker links are manual only.
+- Place labels come from the local place dictionary.
+- The answer says "可能性" for person/photo/event links and avoids relationship
+  inference.
+- Public mode anonymizes person and place labels.

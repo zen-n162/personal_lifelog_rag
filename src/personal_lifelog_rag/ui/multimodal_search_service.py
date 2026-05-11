@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
+from personal_lifelog_rag.db.repository import connect
+from personal_lifelog_rag.db.schema import initialize_schema
 from personal_lifelog_rag.embeddings.multimodal_search import format_multimodal_search, multimodal_search
 from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
 from personal_lifelog_rag.vlm.review_service import (
@@ -63,6 +65,7 @@ def search_result_detail_for_ui(repository, media_id: str | None) -> dict[str, A
         or ""
     )
     events = detail.get("related_events") or _related_events(repository, media_id, timestamp[:10])
+    related_people = _related_people(repository, media_id)
     return {
         "media_id": media_id,
         "thumbnail_path": vlm.get("thumbnail_path") or ocr.get("thumbnail_path") or media.get("thumbnail_path") or "",
@@ -71,7 +74,7 @@ def search_result_detail_for_ui(repository, media_id: str | None) -> dict[str, A
         "caption": redact_text(vlm.get("caption") or vlm.get("short_caption"), max_chars=600),
         "ocr_text": redact_text(ocr.get("ocr_text_redacted") or ocr.get("ocr_text"), max_chars=600),
         "score_components": "",
-        "evidence": _evidence_text(vlm, ocr, events),
+        "evidence": _evidence_text(vlm, ocr, events, related_people),
         "review_status": str(vlm.get("review_status") or detail.get("review_status") or "unreviewed"),
         "events": events,
     }
@@ -122,6 +125,8 @@ def _result_row(index: int, row: dict[str, Any]) -> list[Any]:
         ", ".join(row.get("food_cues") or []),
         ", ".join(row.get("location_cues") or []),
         row.get("related_event") or "",
+        ", ".join(row.get("related_persons") or []),
+        ", ".join(row.get("person_evidence_types") or []),
         row.get("thumbnail_path") or "",
         json.dumps(row.get("score_components") or {}, ensure_ascii=False, sort_keys=True),
         row.get("review_status") or "unreviewed",
@@ -146,7 +151,31 @@ def _related_events(repository, media_id: str, date_value: str) -> list[dict[str
     return events
 
 
-def _evidence_text(vlm: dict[str, Any], ocr: dict[str, Any], events: list[dict[str, Any]]) -> str:
+def _related_people(repository, media_id: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with connect(repository.db_path) as connection:
+        initialize_schema(connection)
+        for row in connection.execute(
+            """
+            SELECT persons.display_name, persons.public_name, media_people.source, media_people.confidence
+            FROM media_people
+            JOIN persons ON persons.id = media_people.person_id
+            WHERE media_people.media_id = ?
+              AND media_people.verified_by_user = 1
+              AND COALESCE(media_people.hidden, 0) = 0
+              AND persons.manual_verified = 1
+              AND COALESCE(persons.hidden, 0) = 0
+              AND persons.deleted_at IS NULL
+            ORDER BY media_people.confidence DESC, persons.display_name ASC
+            LIMIT 5
+            """,
+            (media_id,),
+        ).fetchall():
+            rows.append(dict(row))
+    return rows
+
+
+def _evidence_text(vlm: dict[str, Any], ocr: dict[str, Any], events: list[dict[str, Any]], related_people: list[dict[str, Any]] | None = None) -> str:
     lines = []
     if vlm:
         lines.append("VLM: " + redact_text(vlm.get("short_caption") or vlm.get("caption"), max_chars=180))
@@ -158,6 +187,11 @@ def _evidence_text(vlm: dict[str, Any], ocr: dict[str, Any], events: list[dict[s
         lines.append("OCR: " + redact_text(ocr.get("ocr_text_redacted") or ocr.get("ocr_text"), max_chars=180))
     if events:
         lines.append("related events: " + ", ".join(str(event.get("title") or event.get("event_id")) for event in events[:5]))
+    if related_people:
+        labels = [str(row.get("display_name") or row.get("public_name") or "人物候補") for row in related_people[:5]]
+        sources = sorted({str(row.get("source") or "manual") for row in related_people})
+        lines.append("related persons: " + ", ".join(labels))
+        lines.append("person evidence: " + ", ".join(sources) + " (manual links only)")
     return "\n".join(line for line in lines if line.strip())
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from personal_lifelog_rag.retrieval.food_taxonomy import detect_specific_food_query, generic_food_terms, specific_food_terms_for_query
+
 
 VISUAL_QUERY_SYNONYMS: dict[str, list[str]] = {
     "ご飯": [
@@ -46,7 +48,49 @@ VISUAL_QUERY_SYNONYMS: dict[str, list[str]] = {
     ],
     "料理": ["料理", "meal", "food", "dish", "plate", "bowl", "meal_possible", "food_possible"],
     "カフェ": ["カフェ", "cafe", "cafe_possible", "coffee", "glass_cup", "wooden_table", "dining_area_possible"],
-    "ラーメン": ["ラーメン", "ramen", "noodles", "soup", "bowl", "ramen_possible", "noodle_possible"],
+    "ラーメン": [
+        "ラーメン",
+        "ramen",
+        "ramen noodle",
+        "noodle soup",
+        "chashu",
+        "soft-boiled egg",
+        "ramen_possible",
+        "noodle_possible",
+        "noodles",
+        "soup",
+        "bowl",
+    ],
+    "そば": [
+        "そば",
+        "蕎麦",
+        "soba",
+        "soba noodle",
+        "buckwheat noodle",
+        "japanese noodle",
+        "zaru soba",
+        "tempura soba",
+        "noodles",
+        "bowl",
+    ],
+    "オムライス": [
+        "オムライス",
+        "omurice",
+        "omelette rice",
+        "omelet rice",
+        "rice omelette",
+        "ketchup rice",
+        "fried rice with omelette",
+        "rice",
+        "egg",
+        "dish",
+    ],
+    "カレー": ["カレー", "curry", "japanese curry", "curry rice", "curry sauce", "rice", "dish"],
+    "寿司": ["寿司", "すし", "鮨", "sushi", "nigiri", "sashimi", "maki", "sushi roll"],
+    "うどん": ["うどん", "udon", "udon noodle", "thick wheat noodle", "japanese noodle", "noodles", "bowl"],
+    "焼肉": ["焼肉", "焼き肉", "yakiniku", "grilled meat", "table grill", "bbq meat"],
+    "ピザ": ["ピザ", "pizza", "pizza slice", "cheese pizza"],
+    "デザート": ["デザート", "ケーキ", "スイーツ", "dessert", "cake", "ice cream", "parfait"],
     "車": ["車", "車内", "vehicle", "car", "vehicle_interior_possible", "car_seat_possible", "headrest"],
     "車内": ["車内", "vehicle", "car", "vehicle_interior_possible", "car_seat_possible", "headrest"],
     "室内": ["室内", "indoor", "indoor_possible", "indoor_room_possible", "living_room_possible"],
@@ -100,6 +144,8 @@ def expand_visual_query_terms(query: str) -> list[str]:
         if trigger and trigger in normalized:
             for synonym in synonyms:
                 _append_unique(terms, synonym)
+    for synonym in specific_food_terms_for_query(normalized):
+        _append_unique(terms, synonym)
     if any(trigger in normalized for trigger in ("食べ", "食っ", "食う", "食べた")):
         for synonym in VISUAL_QUERY_SYNONYMS["ご飯"] + VISUAL_QUERY_SYNONYMS["食事"]:
             _append_unique(terms, synonym)
@@ -112,6 +158,19 @@ def visual_query_terms_for_display(query: str, *, limit: int = 20) -> list[str]:
     return expand_visual_query_terms(query)[:limit]
 
 
+def specific_food_query_info(query: str) -> dict[str, object] | None:
+    entry = detect_specific_food_query(query)
+    if not entry:
+        return None
+    return {
+        "key": entry.key,
+        "display_name": entry.display_name,
+        "triggers": list(entry.triggers),
+        "specific_terms": specific_food_terms_for_query(query),
+        "generic_terms": generic_food_terms(),
+    }
+
+
 def _rough_tokens(text: str) -> list[str]:
     ascii_tokens = re.findall(r"[A-Za-z0-9_]+", text)
     jp_tokens = [
@@ -122,6 +181,18 @@ def _rough_tokens(text: str) -> list[str]:
             "料理",
             "カフェ",
             "ラーメン",
+            "そば",
+            "蕎麦",
+            "オムライス",
+            "カレー",
+            "寿司",
+            "すし",
+            "うどん",
+            "焼肉",
+            "焼き肉",
+            "ピザ",
+            "デザート",
+            "ケーキ",
             "車内",
             "車",
             "室内",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms
+from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms, specific_food_query_info
 
 
 def test_gohan_expands_to_vlm_food_terms() -> None:
@@ -46,3 +46,22 @@ def test_visual_query_expands_ocr_document_terms() -> None:
     assert "ocr_text" in receipt_terms
     assert "restaurant_menu" in menu_terms
     assert "signboard" in sign_terms
+
+
+def test_specific_food_terms_expand_for_soba_and_omurice() -> None:
+    soba_terms = expand_visual_query_terms("そばの写真")
+    omurice_terms = expand_visual_query_terms("オムライスの写真")
+
+    assert "soba" in soba_terms
+    assert "buckwheat noodle" in soba_terms
+    assert "omelette rice" in omurice_terms
+    assert "fried rice with omelette" in omurice_terms
+
+
+def test_specific_food_query_info_separates_specific_and_generic_terms() -> None:
+    info = specific_food_query_info("ラーメンの写真")
+
+    assert info is not None
+    assert info["key"] == "ramen"
+    assert "ramen noodle" in info["specific_terms"]
+    assert "meal" in info["generic_terms"]

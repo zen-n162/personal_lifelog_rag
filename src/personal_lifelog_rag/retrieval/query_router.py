@@ -16,7 +16,9 @@ from personal_lifelog_rag.retrieval.local_search import (
 )
 from personal_lifelog_rag.embeddings.multimodal_search import format_multimodal_search, multimodal_search
 from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
+from personal_lifelog_rag.line.person_links import search_person_line_days
 from personal_lifelog_rag.retrieval.monthly_summary import build_monthly_summary_report, format_monthly_summary
+from personal_lifelog_rag.retrieval.person_place_qa import route_person_place_query
 from personal_lifelog_rag.retrieval.query_intent import QueryIntentResult, classify_query_intent
 from personal_lifelog_rag.retrieval.temporal_search import search_timeline
 from personal_lifelog_rag.line.call_index import format_search_calls_report, search_calls
@@ -33,6 +35,7 @@ class RoutedQueryResult:
     answer: str
     results: list[dict[str, Any]]
     intent_reasons: list[str]
+    metadata: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,13 +71,32 @@ def route_query(
     include_hidden: bool = False,
     multimodal_config: dict[str, Any] | None = None,
     multimodal_engine: MultimodalEmbeddingEngine | None = None,
+    public_mode: bool = False,
 ) -> RoutedQueryResult:
     intent_result = classify_query_intent(query, today=today)
     intent = intent_result.intent
 
+    person_place_payload = route_person_place_query(
+        repository,
+        query,
+        intent_result.entities,
+        limit=limit,
+        include_hidden=include_hidden,
+        public_mode=public_mode,
+    )
+    if person_place_payload is not None:
+        return _routed(
+            intent_result,
+            routing=str(person_place_payload["routing"]),
+            answer=str(person_place_payload["answer"]),
+            results=person_place_payload["results"],
+            intent_override=str(person_place_payload["intent"]),
+            metadata=person_place_payload.get("metadata"),
+        )
+
     if intent == "date_qa":
         date_range = parse_date_query(query, today=today)
-        result = search_timeline(repository, query, date_range=date_range, include_hidden=include_hidden)
+        result = search_timeline(repository, query, date_range=date_range, include_hidden=include_hidden, public_mode=public_mode)
         return _routed(
             intent_result,
             routing="ask",
@@ -91,6 +113,14 @@ def route_query(
     if intent in {"place_visit", "food_activity", "topic_mention", "person_interaction"}:
         search_intent = _search_intent_for(intent)
         search_query = _search_query_for(intent_result)
+        if intent == "person_interaction" and _looks_like_line_person_query(query) and intent_result.entities.get("person"):
+            report = search_person_line_days(repository, person_name=str(intent_result.entities["person"]), limit=limit)
+            return _routed(
+                intent_result,
+                routing="line-speaker-search",
+                answer=str(report["answer"]),
+                results=report["results"],
+            )
         if intent in {"place_visit", "food_activity"} and _looks_like_image_query(query):
             report = multimodal_search(
                 repository,
@@ -176,6 +206,7 @@ def route_query(
                 include_hidden=include_hidden,
                 top_days_limit=5,
                 events_per_day=5,
+                public=public_mode,
             )
             return _routed(
                 intent_result,
@@ -234,7 +265,7 @@ def route_query(
             results=rows,
         )
 
-    if intent in {"image_search", "multimodal_image_search", "food_photo_search", "place_photo_search"}:
+    if intent in {"image_search", "multimodal_image_search", "specific_food_search", "food_photo_search", "place_photo_search"}:
         report = multimodal_search(
             repository,
             _multimodal_options(
@@ -281,16 +312,19 @@ def _routed(
     routing: str,
     answer: str,
     results: list[dict[str, Any]],
+    intent_override: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> RoutedQueryResult:
     return RoutedQueryResult(
         query=intent_result.normalized_query,
-        intent=intent_result.intent,
+        intent=intent_override or intent_result.intent,
         intent_confidence=intent_result.confidence,
         entities=intent_result.entities,
         routing=routing,
         answer=answer,
         results=results,
         intent_reasons=intent_result.reasons,
+        metadata=metadata,
     )
 
 
@@ -353,6 +387,10 @@ def _multimodal_options(
 
 def _looks_like_image_query(query: str) -> bool:
     return any(term in query for term in ("写真", "写って", "画像", "撮った", "撮影"))
+
+
+def _looks_like_line_person_query(query: str) -> bool:
+    return any(term in query for term in ("LINE", "ライン", "話した", "話して", "やりとり"))
 
 
 def _photo_activity_results(

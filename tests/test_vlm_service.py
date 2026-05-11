@@ -21,6 +21,17 @@ class UnavailableVlmEngine:
         raise AssertionError("analyze_image should not be called")
 
 
+class EmptyCaptionEngine:
+    name = "empty_caption_test"
+    model_name = "empty-caption-test"
+
+    def is_available(self) -> bool:
+        return True
+
+    def analyze_image(self, image_path: Path, prompt: str) -> VlmResult:
+        return VlmResult(engine=self.name, model_name=self.model_name, status="success", caption="")
+
+
 def test_vlm_dry_run_does_not_write_db(tmp_path: Path) -> None:
     repository = _repository_with_image(tmp_path)
 
@@ -73,6 +84,21 @@ def test_unavailable_vlm_engine_records_status_without_crashing(tmp_path: Path) 
     assert repository.get_media_vlm("media_vlm_service")["status"] == "engine_unavailable"
 
 
+def test_empty_caption_success_is_recorded_as_failed(tmp_path: Path) -> None:
+    repository = _repository_with_image(tmp_path)
+
+    report = run_vlm_images(
+        repository,
+        VlmImagesOptions(start_date="2024-12-24", end_date="2024-12-24", limit=10),
+        engine=EmptyCaptionEngine(),
+    )
+
+    row = repository.get_media_vlm("media_vlm_service")
+    assert report.failed == 1
+    assert row["status"] == "failed"
+    assert "empty caption" in row["error_message"].lower()
+
+
 def test_vlm_stats_returns_tag_counts(tmp_path: Path) -> None:
     repository = _repository_with_image(tmp_path)
     run_vlm_images(
@@ -86,6 +112,27 @@ def test_vlm_stats_returns_tag_counts(tmp_path: Path) -> None:
     assert stats["total_media_vlm"] == 1
     assert stats["status_counts"]["success"] == 1
     assert stats["food_cues_top"]["ramen_possible"] == 1
+
+
+def test_vlm_images_skip_missing_original_files(tmp_path: Path) -> None:
+    repository = _repository_with_image(tmp_path)
+    repository.add_media_item(
+        id="missing_vlm_file",
+        file_path=str(tmp_path / "missing_vlm.png"),
+        file_name="missing_vlm.png",
+        file_hash="hash-missing-vlm",
+        media_type="image",
+        captured_at="2024-12-24T10:05:00+09:00",
+    )
+
+    report = run_vlm_images(
+        repository,
+        VlmImagesOptions(start_date="2024-12-24", end_date="2024-12-24", dry_run=True, limit=10),
+        engine=FakeVlmEngine(),
+    )
+
+    assert report.selected_images == 1
+    assert report.rows[0]["media_id"] == "media_vlm_service"
 
 
 def _repository_with_image(tmp_path: Path) -> LifelogRepository:
@@ -104,4 +151,3 @@ def _repository_with_image(tmp_path: Path) -> LifelogRepository:
         gps_lon=139.0,
     )
     return repository
-

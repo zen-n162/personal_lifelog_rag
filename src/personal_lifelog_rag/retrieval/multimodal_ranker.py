@@ -17,7 +17,15 @@ VLM_TEXT_KEYS = (
     "text_cues_json",
 )
 OCR_KEYS = ("ocr_text", "ocr_text_redacted")
-PLACE_KEYS = ("location_name", "effective_location_name", "location_name_override")
+PLACE_KEYS = (
+    "location_name",
+    "effective_location_name",
+    "location_name_override",
+    "place_display_name",
+    "place_public_name",
+    "place_category",
+    "place_aliases_json",
+)
 VISUAL_MATCH_EMBEDDING_THRESHOLD = 0.35
 
 
@@ -31,6 +39,9 @@ def score_multimodal_components(
     sql_score: float = 0.0,
     matched_terms: list[str] | None = None,
     visual_match_embedding_threshold: float = VISUAL_MATCH_EMBEDDING_THRESHOLD,
+    query_intent: str | None = None,
+    specific_terms: list[str] | None = None,
+    generic_terms: list[str] | None = None,
 ) -> dict[str, float]:
     """Return normalized score components and final hybrid score.
 
@@ -38,21 +49,42 @@ def score_multimodal_components(
     embedding 0.30, VLM text 0.20, OCR 0.15, LINE 0.15, event 0.15, place 0.05.
     """
 
-    vlm_text_score = _field_match_score(row, VLM_TEXT_KEYS, expanded_terms, max_score=1.0)
+    is_specific_food = query_intent == "specific_food_search" or bool(specific_terms)
+    specific_terms = [term for term in (specific_terms or []) if str(term).strip()]
+    generic_terms = [term for term in (generic_terms or []) if str(term).strip()]
+
+    raw_vlm_text_score = _field_match_score(row, VLM_TEXT_KEYS, expanded_terms, max_score=1.0)
+    specific_food_score = _field_match_score(row, VLM_TEXT_KEYS + OCR_KEYS, specific_terms, max_score=1.0) if specific_terms else 0.0
+    generic_food_score = _field_match_score(row, VLM_TEXT_KEYS + OCR_KEYS, generic_terms, max_score=1.0) if generic_terms else 0.0
+    vlm_text_score = raw_vlm_text_score
+    effective_sql_score = sql_score
+    specific_visual_match = False
+    if is_specific_food:
+        specific_visual_match = bool(specific_food_score > 0 or _terms_in_keys(row, specific_terms, VLM_TEXT_KEYS + OCR_KEYS + ("file_name",)))
+        if specific_food_score <= 0:
+            # Generic food words such as meal/bowl/noodle are useful recall
+            # signals, but they must not make a ramen/soba/omurice query look
+            # visually confirmed on their own.
+            vlm_text_score = min(vlm_text_score, 0.2 if generic_food_score else 0.0)
+            effective_sql_score = min(sql_score, 0.2 if generic_food_score else 0.0)
+
     ocr_score = _field_match_score(row, OCR_KEYS, expanded_terms, max_score=1.0)
     line_score = min(1.0, len(line_matches) * 0.35)
     event_score = _event_score(related_event, expanded_terms)
     place_score = _place_score(row, related_event, expanded_terms)
     override_boost = _override_boost(row, related_event)
     safety_penalty = _safety_penalty(row)
-    visual_match = has_visual_match(
-        embedding_score=embedding_score,
-        vlm_text_score=vlm_text_score,
-        ocr_score=ocr_score,
-        sql_score=sql_score,
-        matched_terms=matched_terms or [],
-        embedding_threshold=visual_match_embedding_threshold,
-    )
+    if is_specific_food:
+        visual_match = specific_visual_match
+    else:
+        visual_match = has_visual_match(
+            embedding_score=embedding_score,
+            vlm_text_score=vlm_text_score,
+            ocr_score=ocr_score,
+            sql_score=effective_sql_score,
+            matched_terms=matched_terms or [],
+            embedding_threshold=visual_match_embedding_threshold,
+        )
     if not visual_match:
         line_score = min(line_score, 0.2)
         event_score = min(event_score, 0.2)
@@ -67,6 +99,8 @@ def score_multimodal_components(
         + override_boost
         + safety_penalty
     )
+    if is_specific_food and specific_food_score > 0:
+        final += min(0.18, specific_food_score * 0.18)
 
     # Visual-only candidates are useful but should not dominate activity/date
     # answers without LINE/OCR/event/place support.
@@ -81,9 +115,12 @@ def score_multimodal_components(
         final *= 0.5
 
     return {
-        "sql_score": round(max(0.0, min(sql_score, 1.0)), 3),
+        "sql_score": round(max(0.0, min(effective_sql_score, 1.0)), 3),
         "embedding_score": round(max(0.0, min(embedding_score, 1.0)), 3),
         "vlm_text_score": round(vlm_text_score, 3),
+        "specific_food_score": round(specific_food_score, 3),
+        "generic_food_score": round(generic_food_score, 3),
+        "specific_visual_match": 1.0 if specific_visual_match else 0.0,
         "ocr_score": round(ocr_score, 3),
         "line_score": round(line_score, 3),
         "event_score": round(event_score, 3),
@@ -117,13 +154,19 @@ def has_visual_match(
 
 
 def matched_terms_for_row(row: dict[str, Any], terms: list[str]) -> list[str]:
-    haystack = _joined_fields(row, VLM_TEXT_KEYS + OCR_KEYS + ("file_name",))
+    haystack = _joined_fields(row, VLM_TEXT_KEYS + OCR_KEYS + PLACE_KEYS + ("file_name",))
     matched: list[str] = []
     for term in terms:
         term = str(term or "").strip()
         if term and term.lower() in haystack and term not in matched:
             matched.append(term)
     return matched[:20]
+
+
+def matched_visual_terms_for_row(row: dict[str, Any], terms: list[str]) -> list[str]:
+    """Return matches from visual/OCR fields only, excluding event/place context."""
+
+    return _terms_in_keys(row, terms, VLM_TEXT_KEYS + OCR_KEYS + ("file_name",))[:20]
 
 
 def matched_fields_for_row(row: dict[str, Any], terms: list[str], *, has_embedding: bool) -> list[str]:
@@ -138,6 +181,7 @@ def matched_fields_for_row(row: dict[str, Any], terms: list[str], *, has_embeddi
         "location_cues": ("location_cues_json",),
         "text_cues": ("text_cues_json",),
         "ocr": OCR_KEYS,
+        "place": PLACE_KEYS,
         "file_name": ("file_name",),
     }.items():
         if _field_match_score(row, keys, terms, max_score=1.0) > 0:
@@ -211,6 +255,16 @@ def _field_match_score(row: dict[str, Any], keys: tuple[str, ...], terms: list[s
 
 def _joined_fields(row: dict[str, Any], keys: tuple[str, ...]) -> str:
     return " ".join(_stringify(row.get(key)).lower() for key in keys)
+
+
+def _terms_in_keys(row: dict[str, Any], terms: list[str], keys: tuple[str, ...]) -> list[str]:
+    haystack = _joined_fields(row, keys)
+    matched: list[str] = []
+    for term in terms:
+        value = str(term or "").strip()
+        if value and value.lower() in haystack and value not in matched:
+            matched.append(value)
+    return matched
 
 
 def _stringify(value: Any) -> str:

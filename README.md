@@ -67,6 +67,9 @@ The app must not auto-download models. Use local model paths and
 python -m personal_lifelog_rag.app.cli qa "ご飯を食べた写真はいつ？"
 python -m personal_lifelog_rag.app.cli multimodal-search "ステージの写真" --backend hybrid
 python -m personal_lifelog_rag.app.cli generate-report --public --save-json
+python -m personal_lifelog_rag.app.cli build-portfolio-html --mode public --check-privacy --force
+python -m personal_lifelog_rag.app.cli release-check --version v0.1 --save-manifest
+python -m personal_lifelog_rag.app.cli batch-qa --query "2025年1月は何していた？" --query "ステージの写真はいつ？" --save-run
 python -m personal_lifelog_rag.app.cli month-plan --month 2025-02
 python -m personal_lifelog_rag.app.cli month-run --month 2025-02 --limit 100 --dry-run
 ```
@@ -84,8 +87,29 @@ aggregate metrics, anonymized examples, and public report mode.
 - [System Architecture](docs/system_architecture.md)
 - [Demo Scenarios](docs/demo_scenarios.md)
 - [Privacy and Safety](docs/privacy_and_safety.md)
+- [Location Points and Places](docs/location_places.md)
+- [Place Review UI](docs/place_review_ui.md)
+- [Face Detection](docs/face_detection.md)
+- [Face Embedding and Clustering](docs/face_embedding_clustering.md)
+- [Face Review and Manual People Labels](docs/face_review_people.md)
+- [LINE Speaker and Person Linking](docs/line_person_linking.md)
+- [Person Media and Event Integration](docs/person_event_integration.md)
+- [Person and Place QA](docs/person_place_qa.md)
+- [Privacy Controls](docs/privacy_controls.md)
+- [Person Delete and Export](docs/person_delete_export.md)
+- [Private Eval](docs/private_eval.md)
 - [Evaluation Summary](docs/evaluation_summary.md)
+- [Portfolio HTML](docs/portfolio_html.md)
 - [Roadmap](docs/roadmap.md)
+- [v0.1 Release](docs/releases/v0.1.md)
+- [Reproducibility](docs/reproducibility.md)
+- [UI Review Workflow](docs/ui_review_workflow.md)
+- [Final Publication Checklist](docs/final_publication_checklist.md)
+- [Job Hunting Pitch](docs/job_hunting_pitch.md)
+- [Technical Interview Notes](docs/technical_interview_notes.md)
+- [ML Learning Takeaways](docs/ml_learning_takeaways.md)
+- [ES Self-PR Examples](docs/es_self_pr_examples.md)
+- [Interview Demo Script](docs/demo_script_for_interview.md)
 
 ## Portfolio Note
 
@@ -97,6 +121,30 @@ retrieval, safety filtering, human review, evaluation, and reporting.
 
 Before sharing any generated report or UI screenshot, manually inspect it for
 raw messages, names, exact locations, image paths, and other private details.
+
+## Portfolio HTML
+
+Generate the single-file public portfolio HTML locally:
+
+```bash
+python -m personal_lifelog_rag.app.cli build-portfolio-html \
+  --output reports/portfolio_public.html \
+  --mode public \
+  --check-privacy \
+  --force
+python scripts/check_public_portfolio_safety.py reports/portfolio_public.html
+```
+
+The HTML is self-contained, uses inline CSS, avoids external CDN assets, and is
+designed for public sharing after privacy review. See
+[`docs/portfolio_html.md`](docs/portfolio_html.md) for the generation workflow,
+privacy check, and publication checklist.
+
+For person/place privacy operations, see
+[`docs/privacy_controls.md`](docs/privacy_controls.md) and
+[`docs/person_delete_export.md`](docs/person_delete_export.md). Use dry-run
+first, back up the DB before executed changes, and rerun the public audit before
+sharing artifacts.
 
 ## Privacy Policy
 
@@ -419,6 +467,24 @@ modifying `media_items` or `line_messages`, and it does not overwrite
 `event_overrides.location_name_override`. See `docs/private_places_setup.md`
 for the recommended real-data workflow.
 
+For DB-backed location points and reviewed place clusters, use the newer
+offline workflow:
+
+```bash
+python -m personal_lifelog_rag.app.cli build-location-points --from 2024-12-01 --to 2025-03-31 --dry-run
+python -m personal_lifelog_rag.app.cli build-location-points --from 2024-12-01 --to 2025-03-31 --yes
+python -m personal_lifelog_rag.app.cli cluster-places --from 2024-12-01 --to 2025-03-31 --eps-meters 100 --min-samples 3 --dry-run
+python -m personal_lifelog_rag.app.cli places list-clusters --status unreviewed --limit 20
+python -m personal_lifelog_rag.app.cli places show-cluster --cluster-id CLUSTER_ID
+python -m personal_lifelog_rag.app.cli places create --name "駅周辺" --public-name "駅周辺" --category station --privacy-level public_label
+python -m personal_lifelog_rag.app.cli places link-cluster --place-id PLACE_ID --cluster-id CLUSTER_ID --yes
+python -m personal_lifelog_rag.app.cli assign-places --from 2024-12-01 --to 2025-03-31 --dry-run
+```
+
+This stores exact coordinates only in the local SQLite DB and uses reviewed
+place labels for search, QA, events, monthly summaries, and reports. See
+`docs/location_places.md`.
+
 Check SQLite integrity without dumping private text:
 
 ```bash
@@ -442,6 +508,7 @@ python -m personal_lifelog_rag.app.cli eval-private --path private_eval/question
 python -m personal_lifelog_rag.app.cli eval-private --path private_eval/questions.yaml --case-id date_001
 python -m personal_lifelog_rag.app.cli eval-private --path private_eval/questions.yaml --strict
 python -m personal_lifelog_rag.app.cli make-private-eval-template --date 2024-12-24 --output private_eval/questions_20241224.yaml
+python -m personal_lifelog_rag.app.cli make-private-eval-template --include-people --include-places --include-privacy --output private_eval/questions_people_places.yaml
 python -m personal_lifelog_rag.app.cli eval-compare --before eval_outputs/eval_A.json --after eval_outputs/eval_B.json
 ```
 
@@ -463,6 +530,10 @@ Supported private eval case types:
 - `image_search` / `multimodal_search`: image/VLM/embedding retrieval dates, evidence types, result counts, strength, and overclaim checks.
 - `place_assignment`: safe `location_name` checks without exact GPS leakage.
 - `event_override`: hidden/pinned/verified and override text checks.
+- `place_qa` / `monthly_place_summary`: reviewed place QA without exact coordinate output.
+- `person_line_qa` / `person_photo_qa` / `person_place_activity_qa`: manual person-link QA with skip support when no verified person exists.
+- `face_workflow_quality` / `line_person_link_quality`: face workflow and manual LINE-person link safety checks.
+- `privacy_audit` / `export_privacy`: public artifact and public-redacted export safety checks.
 
 `eval-private` reports summary counts, by-type pass rates, ranking metrics
 (`top1 accuracy`, `expected date recall@5`), and safety metrics. `eval-compare`
@@ -551,7 +622,7 @@ starting a server.
 
 ## UI
 
-The local UI has three tabs:
+The local UI is localhost-only and includes operational tabs for:
 
 - Home / Stats: shows the DB path, registered photo count, registered LINE
   message count, and registered event count.
@@ -559,6 +630,14 @@ The local UI has three tabs:
   It also includes a local OCR runner and OCR stats panel.
 - Ask: accepts a question, shows the extractive answer, evidence LINE rows, and
   evidence photo rows.
+- Monthly Summary, Image Search, Multimodal Search, Report Viewer, VLM Review,
+  Place Review, and Face Review.
+- Place Review: shows place clusters without exact GPS by default, lets you
+  create/update place labels, link clusters, manage `public_name`, category,
+  privacy level, aliases, and reassign media/events.
+- Face Review: shows local face detection bbox rows and optional private crops
+  for review only. It does not identify people or use unreviewed faces in
+  search, QA, event generation, or reports.
 - Events / Timeline: loads one date's generated events, shows evidence counts,
   provides a Review Queue with confidence/modality/status filters, displays
   short LINE evidence and thumbnail-only photo evidence, and saves manual

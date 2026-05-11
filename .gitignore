@@ -1,5 +1,9 @@
 # Local private data
 data/
+data/faces/
+data/faces/crops/
+data/faces/thumbnails/
+data/faces/embeddings/
 backups/
 models/
 thumbnails/

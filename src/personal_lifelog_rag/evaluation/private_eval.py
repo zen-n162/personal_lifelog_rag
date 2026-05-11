@@ -8,6 +8,7 @@ history or full answers.
 from __future__ import annotations
 
 import ast
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
@@ -15,8 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
+from personal_lifelog_rag.db.repository import connect
+from personal_lifelog_rag.db.schema import initialize_schema
 from personal_lifelog_rag.embeddings.multimodal_search import multimodal_search
 from personal_lifelog_rag.embeddings.schemas import MultimodalSearchOptions
+from personal_lifelog_rag.privacy_controls import person_export, privacy_audit
 from personal_lifelog_rag.retrieval.evidence_strength import confidence_at_most, strength_at_least
 from personal_lifelog_rag.line.call_index import search_calls
 from personal_lifelog_rag.retrieval.answer_builder import build_answer
@@ -44,6 +48,18 @@ CLAIM_SUPPORT_KEYWORDS = {
     "meeting": ("待ち合わせ", "待って", "着く", "駅", "東口", "西口", "合流", "集合"),
     "call": ("通話", "不在着信", "電話"),
 }
+PERSON_QA_OVERCLAIM_TERMS = (
+    "確実に一緒にいた",
+    "恋人",
+    "彼女",
+    "彼氏",
+    "家族",
+    "親密",
+    "交際",
+    "付き合っている",
+    "顔認証で確定",
+    "本人確定",
+)
 
 
 @dataclass(frozen=True)
@@ -116,6 +132,22 @@ class PrivateEvalQuestion:
     max_embedding_only_rank: int | None = None
     max_vlm_only_confidence: str | None = None
     expected_strength_at_least: str | None = None
+    expected_place_alias: str | None = None
+    expected_min_places: int | None = None
+    person_public_name: str | None = None
+    allow_skip_if_no_person: bool = False
+    allow_skip_if_no_verified_person: bool = False
+    allow_skip_if_no_place: bool = False
+    allow_zero: bool = False
+    expected_min_face_detections: int | None = None
+    expected_min_face_clusters: int | None = None
+    require_no_public_face_crops: bool = False
+    allow_zero_links: bool = False
+    require_manual_links_only: bool = False
+    target: str | None = None
+    forbidden_patterns: list[str] = field(default_factory=list)
+    mode: str | None = None
+    forbidden_fields: list[str] = field(default_factory=list)
 
 
 def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
@@ -224,6 +256,22 @@ def load_private_eval_questions(path: str | Path) -> list[PrivateEvalQuestion]:
                 max_embedding_only_rank=_none_or_int(row.get("max_embedding_only_rank")),
                 max_vlm_only_confidence=_none_or_str(row.get("max_vlm_only_confidence")),
                 expected_strength_at_least=_none_or_str(row.get("expected_strength_at_least")),
+                expected_place_alias=_none_or_str(row.get("expected_place_alias")),
+                expected_min_places=_none_or_int(row.get("expected_min_places")),
+                person_public_name=_none_or_str(row.get("person_public_name")),
+                allow_skip_if_no_person=bool(row.get("allow_skip_if_no_person", False)),
+                allow_skip_if_no_verified_person=bool(row.get("allow_skip_if_no_verified_person", False)),
+                allow_skip_if_no_place=bool(row.get("allow_skip_if_no_place", False)),
+                allow_zero=bool(row.get("allow_zero", False)),
+                expected_min_face_detections=_none_or_int(row.get("expected_min_face_detections")),
+                expected_min_face_clusters=_none_or_int(row.get("expected_min_face_clusters")),
+                require_no_public_face_crops=bool(row.get("require_no_public_face_crops", False)),
+                allow_zero_links=bool(row.get("allow_zero_links", False)),
+                require_manual_links_only=bool(row.get("require_manual_links_only", False)),
+                target=_none_or_str(row.get("target")),
+                forbidden_patterns=_string_list(row.get("forbidden_patterns")),
+                mode=_none_or_str(row.get("mode")),
+                forbidden_fields=_string_list(row.get("forbidden_fields")),
             )
         )
     return questions
@@ -494,6 +542,52 @@ def _evaluate_one(
         return _evaluate_image_search_case(repository, question)
     if question.case_type == "multimodal_search":
         return _evaluate_multimodal_search_case(repository, question)
+    if question.case_type == "place_qa":
+        return _evaluate_person_place_qa_case(
+            repository,
+            question,
+            expected_intents={"place_visit_search", "place_photo_search", "place_activity_search"},
+            skip_kind="place",
+        )
+    if question.case_type == "monthly_place_summary":
+        return _evaluate_person_place_qa_case(
+            repository,
+            question,
+            expected_intents={"monthly_place_summary"},
+            skip_kind="place",
+        )
+    if question.case_type == "person_line_qa":
+        return _evaluate_person_place_qa_case(
+            repository,
+            question,
+            expected_intents={"person_line_search"},
+            skip_kind="person",
+            include_person_overclaim=True,
+        )
+    if question.case_type == "person_photo_qa":
+        return _evaluate_person_place_qa_case(
+            repository,
+            question,
+            expected_intents={"person_photo_search"},
+            skip_kind="verified_person",
+            include_person_overclaim=True,
+        )
+    if question.case_type == "person_place_activity_qa":
+        return _evaluate_person_place_qa_case(
+            repository,
+            question,
+            expected_intents={"person_place_search", "person_activity_search", "person_event_search"},
+            skip_kind="verified_person",
+            include_person_overclaim=True,
+        )
+    if question.case_type == "face_workflow_quality":
+        return _evaluate_face_workflow_quality_case(repository, question)
+    if question.case_type == "line_person_link_quality":
+        return _evaluate_line_person_link_quality_case(repository, question)
+    if question.case_type == "privacy_audit":
+        return _evaluate_privacy_audit_case(repository, question)
+    if question.case_type == "export_privacy":
+        return _evaluate_export_privacy_case(repository, question)
     if question.case_type not in {"date_qa", "keyword_search"}:
         return _skip_case(question, f"unsupported case type: {question.case_type}")
     if question.case_type == "keyword_search":
@@ -1298,7 +1392,15 @@ def _evaluate_vlm_prompt_case(question: PrivateEvalQuestion) -> dict[str, Any]:
 
 def _evaluate_image_search_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
     query = question.query or question.question
-    report = image_search(repository, ImageSearchOptions(query=query, limit=10))
+    report = image_search(
+        repository,
+        ImageSearchOptions(
+            query=query,
+            limit=10,
+            date_from=question.date_from,
+            date_to=question.date_to,
+        ),
+    )
     results = list(report.get("results") or [])
     result_dates = [str(row.get("date")) for row in results if row.get("date")]
     result_media_ids = [str(row.get("media_id")) for row in results if row.get("media_id")]
@@ -1355,6 +1457,8 @@ def _evaluate_multimodal_search_case(repository, question: PrivateEvalQuestion) 
             query=query,
             limit=10,
             backend="hybrid",
+            date_from=question.date_from,
+            date_to=question.date_to,
         ),
     )
     results = list(report.get("results") or [])
@@ -1416,6 +1520,208 @@ def _evaluate_multimodal_search_case(repository, question: PrivateEvalQuestion) 
             "expected_top_dates_any": question.expected_top_dates_any,
             "results_count": len(results),
             "evidence_strengths": [row.get("evidence_strength") for row in results[:5]],
+        },
+    )
+
+
+def _evaluate_person_place_qa_case(
+    repository,
+    question: PrivateEvalQuestion,
+    *,
+    expected_intents: set[str],
+    skip_kind: str,
+    include_person_overclaim: bool = False,
+) -> dict[str, Any]:
+    skip_reason = _person_place_skip_reason(repository, question, skip_kind)
+    if skip_reason:
+        return _skip_case(question, skip_reason)
+
+    routed = route_query(repository, question.question, limit=10)
+    results = list(routed.results or [])
+    result_dates = _dates_from_routed_results(results)
+    metadata = routed.metadata or {}
+    if (
+        skip_kind in {"person", "verified_person"}
+        and not metadata.get("resolved_person_id")
+        and (question.allow_skip_if_no_person or question.allow_skip_if_no_verified_person)
+    ):
+        return _skip_case(question, "question person was not resolved to a manual verified person")
+    if (
+        skip_kind == "place"
+        and question.expected_place_alias
+        and not metadata.get("resolved_place_id")
+        and question.allow_skip_if_no_place
+    ):
+        return _skip_case(question, "expected place alias was not resolved to a reviewed place")
+    evidence_text = routed.answer + "\n" + json.dumps(_compact_results(results), ensure_ascii=False)
+    issues: list[str] = []
+
+    if routed.intent not in expected_intents:
+        issues.append(f"intent mismatch: {routed.intent} not in {sorted(expected_intents)}")
+    if question.expected_min_results is not None and len(results) < question.expected_min_results:
+        issues.append(f"results below expected_min_results: {len(results)} < {question.expected_min_results}")
+    if question.expected_min_places is not None and len(results) < question.expected_min_places:
+        issues.append(f"places below expected_min_places: {len(results)} < {question.expected_min_places}")
+    if question.expected_top_dates_any and not any(date in result_dates[:5] for date in question.expected_top_dates_any):
+        issues.append("none of expected_top_dates_any found in top5: " + ", ".join(question.expected_top_dates_any))
+    expected_dates = question.expected_top_dates or question.expected_dates
+    if expected_dates and not any(date in result_dates[:5] for date in expected_dates):
+        issues.append("expected dates missing in routed results: " + ", ".join(expected_dates))
+    if question.expected_place_alias:
+        resolved_place_id = metadata.get("resolved_place_id")
+        if not resolved_place_id and question.case_type != "monthly_place_summary":
+            issues.append(f"expected place alias was not resolved: {question.expected_place_alias}")
+    forbidden_claims = list(question.forbidden_claims)
+    if include_person_overclaim:
+        forbidden_claims.extend(term for term in PERSON_QA_OVERCLAIM_TERMS if term not in forbidden_claims)
+    forbidden_found = _forbidden_claims_found(evidence_text, forbidden_claims)
+    if forbidden_found:
+        issues.append("forbidden/overclaim phrases found: " + ", ".join(forbidden_found))
+    if _contains_precise_gps(evidence_text):
+        issues.append("precise GPS-like text found in QA output")
+
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        matched_dates=[date for date in [*expected_dates, *question.expected_top_dates_any] if date in result_dates[:5]],
+        forbidden_claims_found=forbidden_found,
+        answer_preview=redact_text(routed.answer, max_chars=240),
+        events_count=sum(1 for row in results if row.get("event_id") or row.get("event_count")),
+        line_message_count=sum(int(row.get("message_count") or row.get("line_count") or 0) for row in results),
+        photo_count=sum(1 for row in results if row.get("media_id") or row.get("media_count")),
+        extra={
+            "intent": routed.intent,
+            "intent_confidence": routed.intent_confidence,
+            "routing": routed.routing,
+            "results_count": len(results),
+            "top_dates": result_dates[:5],
+            "resolved_person_id": metadata.get("resolved_person_id"),
+            "resolved_place_id": metadata.get("resolved_place_id"),
+            "evidence_types": metadata.get("evidence_types") or [],
+            "source_counts": metadata.get("source_counts") or {},
+            "privacy_mode": metadata.get("privacy_mode"),
+            "overclaim_flags": metadata.get("overclaim_flags") or [],
+        },
+    )
+
+
+def _evaluate_face_workflow_quality_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    with closing(connect(repository.db_path)) as connection:
+        initialize_schema(connection)
+        detections = _count_sql(connection, "SELECT COUNT(*) FROM face_detections")
+        clusters = _count_sql(connection, "SELECT COUNT(*) FROM face_clusters")
+        public_crops = _count_sql(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE (crop_path IS NOT NULL OR thumbnail_path IS NOT NULL)
+              AND COALESCE(privacy_level, 'private') != 'private'
+            """,
+        )
+    issues: list[str] = []
+    if question.expected_min_face_detections is not None and detections < question.expected_min_face_detections:
+        issues.append(
+            f"face detections below expected_min_face_detections: {detections} < {question.expected_min_face_detections}"
+        )
+    if question.expected_min_face_clusters is not None and clusters < question.expected_min_face_clusters:
+        issues.append(
+            f"face clusters below expected_min_face_clusters: {clusters} < {question.expected_min_face_clusters}"
+        )
+    if question.require_no_public_face_crops and public_crops:
+        issues.append(f"public-visible face crops found: {public_crops}")
+    if question.allow_zero and detections == 0 and clusters == 0:
+        issues = [issue for issue in issues if not issue.startswith(("face detections below", "face clusters below"))]
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        answer_preview=f"face_detections={detections}, face_clusters={clusters}",
+        extra={
+            "face_detections": detections,
+            "face_clusters": clusters,
+            "public_face_crops": public_crops,
+        },
+    )
+
+
+def _evaluate_line_person_link_quality_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    with closing(connect(repository.db_path)) as connection:
+        initialize_schema(connection)
+        total = _count_sql(connection, "SELECT COUNT(*) FROM line_speaker_links")
+        non_manual = _count_sql(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM line_speaker_links
+            WHERE COALESCE(source, 'manual') != 'manual'
+               OR COALESCE(verified_by_user, 0) != 1
+            """,
+        )
+    issues: list[str] = []
+    if total == 0 and not question.allow_zero_links:
+        issues.append("no line_speaker_links found")
+    if question.require_manual_links_only and non_manual:
+        issues.append(f"non-manual or unverified speaker links found: {non_manual}")
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        answer_preview=f"line_speaker_links={total}, non_manual={non_manual}",
+        extra={"line_speaker_links": total, "non_manual_links": non_manual},
+    )
+
+
+def _evaluate_privacy_audit_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    target = question.target or question.question
+    path = Path(target).expanduser()
+    audit = privacy_audit(repository, public=True, public_paths=[path], log_action=False)
+    issues = [f"{item.get('pattern')} in {item.get('file')}:{item.get('line')}" for item in audit.get("issues", [])]
+    explicit_found = _forbidden_patterns_in_file(path, question.forbidden_patterns)
+    if explicit_found:
+        issues.append("explicit forbidden patterns found: " + ", ".join(explicit_found))
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        forbidden_claims_found=explicit_found,
+        answer_preview=redact_text(json.dumps(audit, ensure_ascii=False), max_chars=240),
+        extra={
+            "target": str(path),
+            "privacy_audit_passed": audit.get("passed"),
+            "issue_count": audit.get("issue_count"),
+            "blocked_patterns": audit.get("blocked_patterns") or [],
+        },
+    )
+
+
+def _evaluate_export_privacy_case(repository, question: PrivateEvalQuestion) -> dict[str, Any]:
+    person = _select_eval_person(repository, question.person_public_name)
+    if person is None:
+        if question.allow_skip_if_no_person or question.allow_skip_if_no_verified_person:
+            return _skip_case(question, "no manual verified person available")
+        return _generic_case(question, status="fail", issues=["no manual verified person available"])
+    mode = question.mode or "public_redacted"
+    report = person_export(repository, person_id=str(person["id"]), mode=mode, dry_run=True)
+    payload = report.get("payload") or {}
+    forbidden_fields = question.forbidden_fields or ["display_name", "face_embedding", "crop_path", "exact_lat", "exact_lon"]
+    found_fields = _forbidden_fields_found(payload, forbidden_fields)
+    private_name = str(person.get("display_name") or "")
+    if mode == "public_redacted" and private_name and private_name in json.dumps(payload, ensure_ascii=False):
+        found_fields.append("private_display_name")
+    issues = ["forbidden export fields found: " + ", ".join(found_fields)] if found_fields else []
+    return _generic_case(
+        question,
+        status="pass" if not issues else "fail",
+        issues=issues,
+        forbidden_claims_found=found_fields,
+        answer_preview=redact_text(json.dumps(payload, ensure_ascii=False), max_chars=240),
+        extra={
+            "person_id": person.get("id"),
+            "mode": mode,
+            "forbidden_fields_found": found_fields,
+            "export_counts": payload.get("counts") or {},
         },
     )
 
@@ -1519,6 +1825,100 @@ def _compact_results(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return compact
+
+
+def _person_place_skip_reason(repository, question: PrivateEvalQuestion, skip_kind: str) -> str | None:
+    with closing(connect(repository.db_path)) as connection:
+        initialize_schema(connection)
+        person_count = _count_sql(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM persons
+            WHERE manual_verified = 1
+              AND COALESCE(hidden, 0) = 0
+              AND COALESCE(searchable, 1) = 1
+              AND deleted_at IS NULL
+            """,
+        )
+        place_count = _count_sql(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM places
+            WHERE COALESCE(hidden, 0) = 0
+              AND COALESCE(searchable, 1) = 1
+            """,
+        )
+    if skip_kind == "person" and question.allow_skip_if_no_person and person_count == 0:
+        return "no manual verified person available"
+    if skip_kind == "verified_person" and question.allow_skip_if_no_verified_person and person_count == 0:
+        return "no manual verified person available"
+    if skip_kind == "place" and question.allow_skip_if_no_place and place_count == 0:
+        return "no reviewed place available"
+    return None
+
+
+def _count_sql(connection, sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> int:
+    row = connection.execute(sql, params or []).fetchone()
+    if row is None:
+        return 0
+    return int(row[0] or 0)
+
+
+def _select_eval_person(repository, public_name: str | None = None) -> dict[str, Any] | None:
+    params: list[Any] = []
+    where = """
+        manual_verified = 1
+        AND COALESCE(hidden, 0) = 0
+        AND COALESCE(searchable, 1) = 1
+        AND deleted_at IS NULL
+    """
+    if public_name:
+        where += " AND (public_name = ? OR display_name = ?)"
+        params.extend([public_name, public_name])
+    with closing(connect(repository.db_path)) as connection:
+        initialize_schema(connection)
+        row = connection.execute(
+            f"""
+            SELECT *
+            FROM persons
+            WHERE {where}
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _forbidden_patterns_in_file(path: Path, patterns: list[str]) -> list[str]:
+    if not patterns or not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return [pattern for pattern in patterns if pattern and pattern in text]
+
+
+def _forbidden_fields_found(payload: Any, forbidden_fields: list[str]) -> list[str]:
+    found: set[str] = set()
+    forbidden = {str(field) for field in forbidden_fields if str(field).strip()}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key) in forbidden:
+                    found.add(str(key))
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, str):
+            for field in forbidden:
+                if field and field in value:
+                    found.add(field)
+
+    visit(payload)
+    return sorted(found)
 
 
 def _statuses_from_filters(filters: dict[str, Any]) -> list[str] | None:
@@ -1837,6 +2237,9 @@ def _is_negated_or_cautioned_context(context: str) -> bool:
         "とはいえません",
         "とは限りません",
         "ではありません",
+        "表示していません",
+        "出していません",
+        "含みません",
     )
     return any(marker in context for marker in cautious_markers)
 

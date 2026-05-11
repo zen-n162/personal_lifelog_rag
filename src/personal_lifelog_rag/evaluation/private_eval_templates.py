@@ -151,6 +151,164 @@ def write_private_eval_template_for_date(repository, *, date: str, output_path: 
     )
 
 
+def build_private_eval_template(
+    repository,
+    *,
+    date: str | None = None,
+    include_people: bool = False,
+    include_places: bool = False,
+    include_privacy: bool = False,
+) -> tuple[str, PrivateEvalTemplateSummary]:
+    """Build a template that can include people/place/privacy smoke cases.
+
+    Generated cases are intentionally generic and anonymized. They avoid raw
+    LINE text, exact GPS, face crop paths, and local absolute paths.
+    """
+
+    cases: list[dict[str, Any]] = []
+    base_summary: PrivateEvalTemplateSummary | None = None
+    if date:
+        text, base_summary = build_private_eval_template_for_date(repository, date=date)
+        payload = _parse_rendered_cases(text)
+        cases.extend(payload)
+
+    if include_places:
+        cases.extend(
+            [
+                {
+                    "id": "place_shinjuku_visit",
+                    "type": "place_qa",
+                    "question": "新宿に行ったのはいつ？",
+                    "expected_place_alias": "新宿",
+                    "expected_min_results": 1,
+                    "allow_skip_if_no_place": True,
+                    "should_not_include": ["GPS座標", "緯度", "経度"],
+                },
+                {
+                    "id": "monthly_places_202501",
+                    "type": "monthly_place_summary",
+                    "question": "2025年1月に行った場所は？",
+                    "expected_min_places": 1,
+                    "allow_skip_if_no_place": True,
+                    "should_not_include": ["緯度", "経度"],
+                },
+            ]
+        )
+
+    if include_people:
+        cases.extend(
+            [
+                {
+                    "id": "person_line_test",
+                    "type": "person_line_qa",
+                    "question": "人物AとLINEした日は？",
+                    "expected_min_results": 1,
+                    "person_public_name": "人物A",
+                    "allow_skip_if_no_person": True,
+                },
+                {
+                    "id": "person_photo_test",
+                    "type": "person_photo_qa",
+                    "question": "人物Aが写っている写真はいつ？",
+                    "expected_min_results": 1,
+                    "allow_skip_if_no_verified_person": True,
+                },
+                {
+                    "id": "person_place_food_test",
+                    "type": "person_place_activity_qa",
+                    "question": "人物Aとカフェに行った日は？",
+                    "allow_skip_if_no_verified_person": True,
+                    "should_not_include": ["確実に", "恋人", "家族"],
+                },
+                {
+                    "id": "face_workflow_quality",
+                    "type": "face_workflow_quality",
+                    "expected_min_face_detections": 0,
+                    "expected_min_face_clusters": 0,
+                    "allow_zero": True,
+                    "require_no_public_face_crops": True,
+                },
+                {
+                    "id": "line_person_link_quality",
+                    "type": "line_person_link_quality",
+                    "allow_zero_links": True,
+                    "require_manual_links_only": True,
+                },
+            ]
+        )
+
+    if include_privacy:
+        cases.extend(
+            [
+                {
+                    "id": "public_privacy_audit",
+                    "type": "privacy_audit",
+                    "target": "reports/portfolio_public.html",
+                    "forbidden_patterns": [
+                        "/home/zennakamura",
+                        "data/raw",
+                        "private_config",
+                        "GPS座標",
+                        "face crop",
+                    ],
+                },
+                {
+                    "id": "person_export_privacy",
+                    "type": "export_privacy",
+                    "person_public_name": "人物A",
+                    "allow_skip_if_no_person": True,
+                    "mode": "public_redacted",
+                    "forbidden_fields": ["display_name", "face_embedding", "crop_path", "exact_lat", "exact_lon"],
+                },
+            ]
+        )
+
+    baseline = date or "people_places_privacy"
+    text = _render_yaml(cases, date=baseline)
+    summary = PrivateEvalTemplateSummary(
+        path=Path(),
+        date=baseline,
+        case_count=len(cases),
+        event_count=base_summary.event_count if base_summary else 0,
+        evidence_types=base_summary.evidence_types if base_summary else [],
+        vlm_success_count=base_summary.vlm_success_count if base_summary else 0,
+        vlm_engine=base_summary.vlm_engine if base_summary else None,
+        completed_call_count=base_summary.completed_call_count if base_summary else 0,
+    )
+    return text, summary
+
+
+def write_private_eval_template_from_options(
+    repository,
+    *,
+    output_path: str | Path,
+    date: str | None = None,
+    include_people: bool = False,
+    include_places: bool = False,
+    include_privacy: bool = False,
+) -> PrivateEvalTemplateSummary:
+    text, summary = build_private_eval_template(
+        repository,
+        date=date,
+        include_people=include_people,
+        include_places=include_places,
+        include_privacy=include_privacy,
+    )
+    path = Path(output_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return PrivateEvalTemplateSummary(
+        path=path,
+        date=summary.date,
+        case_count=summary.case_count,
+        event_count=summary.event_count,
+        evidence_types=summary.evidence_types,
+        vlm_success_count=summary.vlm_success_count,
+        vlm_engine=summary.vlm_engine,
+        completed_call_count=summary.completed_call_count,
+    )
+
+
 def format_private_eval_template_summary(summary: PrivateEvalTemplateSummary) -> str:
     lines = [
         "Private eval template generated",
@@ -167,6 +325,14 @@ def format_private_eval_template_summary(summary: PrivateEvalTemplateSummary) ->
         "Do not commit private_eval/ files.",
     ]
     return "\n".join(lines)
+
+
+def _parse_rendered_cases(text: str) -> list[dict[str, Any]]:
+    from personal_lifelog_rag.evaluation.private_eval import _load_json_or_simple_yaml
+
+    payload = _load_json_or_simple_yaml(text)
+    rows = payload.get("questions") or payload.get("cases") if isinstance(payload, dict) else []
+    return [dict(row) for row in rows if isinstance(row, dict)]
 
 
 def _event_evidence_types(repository, events: list[dict[str, Any]]) -> set[str]:

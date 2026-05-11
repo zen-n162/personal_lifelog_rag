@@ -25,6 +25,7 @@ def monthly_summary_for_ui(
         start_date=start_date,
         end_date=end_date,
         include_hidden=include_hidden and mode == "private",
+        public=mode == "public",
     )
     media = report["media"]
     metrics = [
@@ -36,6 +37,16 @@ def monthly_summary_for_ui(
         ["vlm_success_photos", media["vlm_success_photos"]],
         ["ocr_success_photos", media["ocr_success_photos"]],
     ]
+    person_summary = report.get("person_summary") or {}
+    if person_summary.get("enabled"):
+        metrics.extend(
+            [
+                ["person_related_events", person_summary.get("event_people_count", 0)],
+                ["person_related_media", person_summary.get("media_people_count", 0)],
+                ["person_linked_line_messages", person_summary.get("line_message_count", 0)],
+                ["person_linked_calls", person_summary.get("call_count", 0)],
+            ]
+        )
     title_rows = [[title, count] for title, count in report["title_distribution"].items()]
     top_day_rows = [
         [

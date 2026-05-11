@@ -257,6 +257,70 @@ def test_evidence_strength_rules() -> None:
     )
 
 
+def test_specific_food_search_ranks_specific_dish_above_generic_food_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    repository = LifelogRepository(db_path)
+    repository.initialize()
+    repository.add_media_item(
+        id="media_generic_rice_context",
+        file_path=str(tmp_path / "generic.jpg"),
+        file_name="generic.jpg",
+        file_hash="hash-generic-rice",
+        media_type="image",
+        captured_at="2024-12-24T12:00:00+09:00",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_generic_rice_context",
+        caption="A rice dish in a bowl at a restaurant",
+        food_cues=["meal_possible"],
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+    event_id = repository.add_event(
+        id="event_generic_omurice_context",
+        date="2024-12-24",
+        start_time="12:00:00",
+        end_time="13:00:00",
+        title="オムライスの話",
+        summary="同日イベント",
+        confidence=0.95,
+    )
+    repository.add_event_evidence(event_id=event_id, evidence_type="photo", evidence_id="media_generic_rice_context")
+    repository.add_line_message(
+        id="line_generic_omurice_context",
+        chat_id="chat_dummy",
+        source_file="sample_chat.txt",
+        sent_at="2024-12-24T12:10:00+09:00",
+        sender="自分",
+        text="オムライスの話をした",
+    )
+
+    repository.add_media_item(
+        id="media_specific_omurice",
+        file_path=str(tmp_path / "omurice.jpg"),
+        file_name="omurice.jpg",
+        file_hash="hash-specific-omurice",
+        media_type="image",
+        captured_at="2024-12-25T12:00:00+09:00",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_specific_omurice",
+        caption="Omelette rice with ketchup sauce",
+        food_cues=["omurice", "omelette_rice_possible"],
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+
+    report = multimodal_search(repository, MultimodalSearchOptions(query="オムライスの写真", backend="vlm_sql", limit=5))
+    generic = next(row for row in report["results"] if row["media_id"] == "media_generic_rice_context")
+
+    assert report["results"][0]["media_id"] == "media_specific_omurice"
+    assert generic["score_components"]["specific_food_score"] == 0.0
+    assert generic["score_components"]["line_score"] <= 0.2
+    assert generic["score_components"]["event_score"] <= 0.2
+    assert generic["evidence_strength"] == "weak"
+
+
 def _seed_multimodal_records(tmp_path: Path) -> LifelogRepository:
     db_path = tmp_path / "lifelog.sqlite"
     repository = LifelogRepository(db_path)

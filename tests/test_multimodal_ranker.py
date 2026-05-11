@@ -70,6 +70,59 @@ def test_visual_match_allows_context_boosts() -> None:
     assert components["final_score"] > 0.2
 
 
+def test_specific_food_generic_only_match_stays_weak() -> None:
+    terms = expand_visual_query_terms("ラーメンの写真")
+    components = score_multimodal_components(
+        {"caption": "A bowl of food on a restaurant table", "food_cues_json": '["meal_possible"]'},
+        expanded_terms=terms,
+        embedding_score=0.2,
+        related_event={"title": "ラーメンの話", "summary": "同日イベント", "confidence": 0.95},
+        line_matches=[{"text": "ラーメン食べたい"} for _ in range(5)],
+        sql_score=0.8,
+        matched_terms=["food", "bowl", "meal"],
+        query_intent="specific_food_search",
+        specific_terms=["ラーメン", "ramen", "ramen noodle", "noodle soup", "chashu", "soft-boiled egg"],
+        generic_terms=["food", "meal", "bowl", "dish", "cafe", "restaurant", "rice", "noodle", "soup"],
+    )
+
+    assert components["specific_food_score"] == 0.0
+    assert components["generic_food_score"] > 0
+    assert components["specific_visual_match"] == 0.0
+    assert components["visual_match"] == 0.0
+    assert components["line_score"] <= 0.2
+    assert components["event_score"] <= 0.2
+
+
+def test_specific_food_match_gets_bonus() -> None:
+    terms = expand_visual_query_terms("オムライスの写真")
+    generic = score_multimodal_components(
+        {"caption": "A rice dish on a table", "food_cues_json": '["meal_possible"]'},
+        expanded_terms=terms,
+        embedding_score=0.1,
+        related_event=None,
+        line_matches=[],
+        sql_score=0.5,
+        query_intent="specific_food_search",
+        specific_terms=["オムライス", "omurice", "omelette rice", "fried rice with omelette"],
+        generic_terms=["food", "meal", "bowl", "dish", "rice"],
+    )
+    specific = score_multimodal_components(
+        {"caption": "Omelette rice with ketchup sauce", "food_cues_json": '["omurice"]'},
+        expanded_terms=terms,
+        embedding_score=0.1,
+        related_event=None,
+        line_matches=[],
+        sql_score=0.5,
+        query_intent="specific_food_search",
+        specific_terms=["オムライス", "omurice", "omelette rice", "fried rice with omelette"],
+        generic_terms=["food", "meal", "bowl", "dish", "rice"],
+    )
+
+    assert specific["specific_food_score"] > 0
+    assert specific["specific_visual_match"] == 1.0
+    assert specific["final_score"] > generic["final_score"]
+
+
 def test_evidence_strength_rules_for_pr35() -> None:
     assert compute_evidence_strength(["photo", "vlm"]) == "weak"
     assert compute_evidence_strength(["photo", "embedding"]) == "weak"

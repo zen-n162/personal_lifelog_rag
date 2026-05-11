@@ -146,3 +146,29 @@ For each month:
 5. Review monthly summary, multimodal search, and private eval.
 6. Increase limits only after failures and overclaims are understood.
 
+## 2025-03 Rollout Snapshot
+
+2025-03 has already completed the heavy VLM and embedding pilot. Do not rerun
+the heavy month execution unless there is a specific reason.
+
+Current operational snapshot:
+
+- VLM: 286 success, 14 failed, 0 engine unavailable.
+- Embeddings: 586 success.
+- Events: 119 after rebuild.
+- Monthly QA: `2025年3月は何していた？` routes to monthly summary.
+- Strict DB validation recovered to ok after maintenance.
+
+Recommended next checks:
+
+```bash
+conda run -n personal_lifelog_rag python -m personal_lifelog_rag.app.cli month-status --month 2025-03
+conda run -n personal_lifelog_rag python -m personal_lifelog_rag.app.cli qa "2025年3月は何していた？"
+conda run -n personal_lifelog_rag python -m personal_lifelog_rag.app.cli db-check --strict
+```
+
+Plan only for following months:
+
+```bash
+conda run -n personal_lifelog_rag python -m personal_lifelog_rag.app.cli month-batch --from-month 2025-04 --to-month 2025-06 --dry-run
+```

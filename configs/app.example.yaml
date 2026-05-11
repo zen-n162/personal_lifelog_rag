@@ -58,6 +58,27 @@ models:
     embedding_dim: null
     batch_size: 4
 
+face_detection:
+  engine: "opencv_yunet"
+  model_path: "models/face/face_detection_yunet.onnx"
+  local_only: true
+  score_threshold: 0.85
+  nms_threshold: 0.3
+  top_k: 5000
+  max_input_size: 1280
+
+face_embedding:
+  engine: "opencv_sface"
+  model_path: "models/face/sface.onnx"
+  embedding_dim: 128
+  local_only: true
+  normalize: true
+
+face_clustering:
+  method: "dbscan_cosine"
+  distance_threshold: 0.45
+  min_samples: 2
+
 privacy:
   allow_network: false
   bind_host: 127.0.0.1

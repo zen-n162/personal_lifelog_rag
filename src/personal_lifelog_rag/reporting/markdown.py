@@ -55,11 +55,17 @@ def _architecture() -> list[str]:
 
 def _privacy(data: dict[str, Any]) -> list[str]:
     redaction = data.get("redaction") or {}
+    options = data.get("options") or {}
+    ignored_dirs = (
+        "Private local data, config, model, backup, evaluation, and report folders are kept out of Git."
+        if options.get("mode", "public") == "public"
+        else "`data/`, `private_config/`, `private_eval/`, `eval_outputs/`, `backups/`, `models/`, and `reports/` are kept out of Git."
+    )
     return [
         "## 3. Privacy and Safety Design",
         "",
         "- Local-only processing; no cloud OCR/VLM/embedding API is required.",
-        "- `data/`, `private_config/`, `private_eval/`, `eval_outputs/`, `backups/`, `models/`, and `reports/` are kept out of Git.",
+        f"- {ignored_dirs}",
         "- Exact GPS coordinates are hidden in reports.",
         "- File paths and media IDs are hidden or shortened.",
         "- LINE text is omitted or shortened; full message bodies are not included.",

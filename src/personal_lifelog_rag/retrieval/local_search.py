@@ -135,6 +135,9 @@ def format_local_search_report(report: dict[str, Any]) -> str:
                         f"confidence={_format_float(event.get('confidence'))}{flag_text} "
                         f"evidence={event.get('event_evidence_count', 0)}"
                     )
+                    place_label = event.get("location_name") or event.get("place_display_name") or event.get("place_public_name")
+                    if place_label:
+                        lines.append(f"     place: {place_label}")
                     if event.get("summary_preview"):
                         lines.append(f"     {event['summary_preview']}")
             if result["line_samples"]:
@@ -233,6 +236,8 @@ def _build_day_result(date: str, rows: dict[str, list[dict[str, Any]]]) -> dict[
     evidence_types = []
     if event_count:
         evidence_types.append("events")
+        if any(event.get("location_name") or event.get("place_display_name") or event.get("place_public_name") for event in rows["events"]):
+            evidence_types.append("place")
     if line_count:
         evidence_types.append("line")
     if media_count:
@@ -290,6 +295,10 @@ def _event_preview(event: dict[str, Any]) -> dict[str, Any]:
         "title": redact_text(event.get("title"), max_chars=80),
         "summary_preview": redact_text(event.get("summary"), max_chars=100),
         "location_name": redact_text(event.get("location_name"), max_chars=40),
+        "place_display_name": redact_text(event.get("place_display_name"), max_chars=40),
+        "place_public_name": redact_text(event.get("place_public_name"), max_chars=40),
+        "place_category": event.get("place_category"),
+        "place_manual_verified": int(event.get("place_manual_verified") or 0),
         "confidence": event.get("confidence"),
         "event_evidence_count": int(event.get("event_evidence_count") or 0),
         "line_evidence_count": int(event.get("line_evidence_count") or 0),

@@ -1,0 +1,84 @@
+# Local-only visual search taxonomy for specific dish queries.
+# This file is documentation/config seed data; runtime code keeps a dependency-free
+# fallback copy in personal_lifelog_rag.retrieval.food_taxonomy.
+ramen:
+  display_name: "ラーメン"
+  triggers: ["ラーメン", "らーめん", "ramen"]
+  specific_terms:
+    - ramen
+    - ramen noodle
+    - noodle soup
+    - chashu
+    - soft-boiled egg
+soba:
+  display_name: "そば"
+  triggers: ["そば", "蕎麦", "soba"]
+  specific_terms:
+    - soba
+    - buckwheat noodle
+    - japanese noodle
+    - zaru soba
+    - tempura soba
+udon:
+  display_name: "うどん"
+  triggers: ["うどん", "饂飩", "udon"]
+  specific_terms:
+    - udon
+    - udon noodle
+    - thick wheat noodle
+    - japanese noodle
+    - tempura udon
+omurice:
+  display_name: "オムライス"
+  triggers: ["オムライス", "おむらいす", "omurice"]
+  specific_terms:
+    - omurice
+    - omelette rice
+    - rice omelette
+    - ketchup rice
+    - fried rice with omelette
+curry:
+  display_name: "カレー"
+  triggers: ["カレー", "curry"]
+  specific_terms:
+    - curry
+    - japanese curry
+    - curry rice
+    - curry sauce
+sushi:
+  display_name: "寿司"
+  triggers: ["寿司", "すし", "鮨", "sushi"]
+  specific_terms:
+    - sushi
+    - nigiri
+    - sashimi
+    - maki
+yakiniku:
+  display_name: "焼肉"
+  triggers: ["焼肉", "焼き肉", "yakiniku"]
+  specific_terms:
+    - yakiniku
+    - grilled meat
+    - table grill
+pizza:
+  display_name: "ピザ"
+  triggers: ["ピザ", "pizza"]
+  specific_terms:
+    - pizza
+    - pizza slice
+cafe_drink:
+  display_name: "カフェドリンク"
+  triggers: ["コーヒー", "珈琲", "カフェラテ", "ラテ", "coffee", "cafe latte"]
+  specific_terms:
+    - coffee
+    - cafe latte
+    - latte
+    - espresso
+dessert:
+  display_name: "デザート"
+  triggers: ["デザート", "ケーキ", "スイーツ", "dessert", "cake"]
+  specific_terms:
+    - dessert
+    - cake
+    - ice cream
+    - parfait

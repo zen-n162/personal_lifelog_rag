@@ -1729,6 +1729,23 @@ def _search_media_items_query(
             """
         )
         params.append(like_value)
+        term_clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM media_places
+                JOIN places ON places.id = media_places.place_id
+                WHERE media_places.media_id = media_items.id
+                  AND (
+                    COALESCE(places.display_name, '') LIKE ?
+                    OR COALESCE(places.public_name, '') LIKE ?
+                    OR COALESCE(places.category, '') LIKE ?
+                    OR COALESCE(places.aliases_json, '') LIKE ?
+                  )
+            )
+            """
+        )
+        params.extend([like_value, like_value, like_value, like_value])
     clauses.append("(" + " OR ".join(term_clauses) + ")")
     if start_date is not None:
         clauses.append(f"substr({timestamp}, 1, 10) >= ?")
@@ -1738,7 +1755,32 @@ def _search_media_items_query(
         params.append(end_date)
     params.append(limit)
     query = f"""
-        SELECT media_items.*
+        SELECT
+            media_items.*,
+            (
+                SELECT GROUP_CONCAT(places.display_name, ' ')
+                FROM media_places
+                JOIN places ON places.id = media_places.place_id
+                WHERE media_places.media_id = media_items.id
+            ) AS place_display_name,
+            (
+                SELECT GROUP_CONCAT(COALESCE(places.public_name, places.category), ' ')
+                FROM media_places
+                JOIN places ON places.id = media_places.place_id
+                WHERE media_places.media_id = media_items.id
+            ) AS place_public_name,
+            (
+                SELECT GROUP_CONCAT(places.category, ' ')
+                FROM media_places
+                JOIN places ON places.id = media_places.place_id
+                WHERE media_places.media_id = media_items.id
+            ) AS place_category,
+            (
+                SELECT GROUP_CONCAT(places.aliases_json, ' ')
+                FROM media_places
+                JOIN places ON places.id = media_places.place_id
+                WHERE media_places.media_id = media_items.id
+            ) AS place_aliases_json
         FROM media_items
         WHERE {' AND '.join(clauses)}
         ORDER BY {timestamp} ASC, media_items.id ASC
@@ -1773,6 +1815,25 @@ def _search_events_query(
         for term in terms:
             term_clauses.append(f"COALESCE({column}, '') LIKE ?")
             params.append(f"%{term}%")
+    for term in terms:
+        like_value = f"%{term}%"
+        term_clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                WHERE event_places.event_id = events.id
+                  AND (
+                    COALESCE(places.display_name, '') LIKE ?
+                    OR COALESCE(places.public_name, '') LIKE ?
+                    OR COALESCE(places.category, '') LIKE ?
+                    OR COALESCE(places.aliases_json, '') LIKE ?
+                  )
+            )
+            """
+        )
+        params.extend([like_value, like_value, like_value, like_value])
     clauses.append("(" + " OR ".join(term_clauses) + ")")
     if start_date is not None:
         clauses.append("substr(events.date, 1, 10) >= ?")
@@ -1794,6 +1855,30 @@ def _search_events_query(
             COALESCE(event_overrides.is_hidden, 0) AS is_hidden,
             COALESCE(event_overrides.is_pinned, 0) AS is_pinned,
             event_overrides.updated_at AS override_updated_at,
+            (
+                SELECT GROUP_CONCAT(places.display_name, ' ')
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                WHERE event_places.event_id = events.id
+            ) AS place_display_name,
+            (
+                SELECT GROUP_CONCAT(COALESCE(places.public_name, places.category), ' ')
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                WHERE event_places.event_id = events.id
+            ) AS place_public_name,
+            (
+                SELECT GROUP_CONCAT(places.category, ' ')
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                WHERE event_places.event_id = events.id
+            ) AS place_category,
+            (
+                SELECT MAX(places.manual_verified)
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                WHERE event_places.event_id = events.id
+            ) AS place_manual_verified,
             (
                 SELECT COUNT(*)
                 FROM event_evidence

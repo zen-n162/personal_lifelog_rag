@@ -7,7 +7,8 @@ import json
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
-from personal_lifelog_rag.db.repository import LifelogRepository
+from personal_lifelog_rag.db.repository import LifelogRepository, connect
+from personal_lifelog_rag.db.schema import initialize_schema
 from personal_lifelog_rag.embeddings.base import MultimodalEmbeddingEngine
 from personal_lifelog_rag.embeddings.engines import (
     get_cached_multimodal_embedding_engine,
@@ -24,9 +25,11 @@ from personal_lifelog_rag.retrieval.local_search import extract_search_terms
 from personal_lifelog_rag.retrieval.multimodal_ranker import (
     matched_fields_for_row,
     matched_terms_for_row,
+    matched_visual_terms_for_row,
     score_multimodal_components,
 )
-from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms
+from personal_lifelog_rag.retrieval.person_place_qa import resolve_persons_from_query
+from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms, specific_food_query_info
 from personal_lifelog_rag.vlm.review_service import apply_vlm_override_to_result, should_use_vlm_for_search
 from personal_lifelog_rag.vlm.schemas import ImageSearchOptions
 from personal_lifelog_rag.vlm.vlm_service import image_search
@@ -130,10 +133,18 @@ def format_multimodal_search(report: dict[str, Any]) -> str:
             lines.append(f"   OCR: {row['ocr_preview']}")
         if row.get("food_cues"):
             lines.append(f"   food_cues: {', '.join(row['food_cues'])}")
+        if row.get("specific_food_matched_terms"):
+            lines.append(f"   specific_food_terms: {', '.join(row['specific_food_matched_terms'][:8])}")
+        elif row.get("generic_food_matched_terms"):
+            lines.append(f"   generic_food_terms_only: {', '.join(row['generic_food_matched_terms'][:8])}")
         if row.get("matched_terms"):
             lines.append(f"   matched_terms: {', '.join(row['matched_terms'][:8])}")
         if row.get("related_event"):
             lines.append(f"   event: {row['related_event']}")
+        if row.get("related_persons"):
+            lines.append(f"   related_persons: {', '.join(row['related_persons'])}")
+            lines.append(f"   person_evidence: {', '.join(row.get('person_evidence_types') or [])}")
+            lines.append("   person caution: 手動リンク済みperson由来の候補です。顔だけで同席や関係性を断定しません。")
         if row.get("review_status") and row.get("review_status") != "unreviewed":
             lines.append(f"   VLM review: {row['review_status']}")
         if row.get("is_verified"):
@@ -206,7 +217,12 @@ def _embedding_candidates(
                 "embedding_model": row.get("embedding_model"),
                 "embedding_row": row,
             }
-    return candidates
+    candidate_limit = max(options.limit * 50, 500)
+    return dict(
+        sorted(candidates.items(), key=lambda item: (-float(item[1].get("embedding_score") or 0.0), item[0]))[
+            :candidate_limit
+        ]
+    )
 
 
 def _sql_candidates(repository: LifelogRepository, options: MultimodalSearchOptions) -> dict[str, dict[str, Any]]:
@@ -221,7 +237,8 @@ def _sql_candidates(repository: LifelogRepository, options: MultimodalSearchOpti
         ),
     )
     candidates: dict[str, dict[str, Any]] = {}
-    for row in report.get("results") or []:
+    candidate_limit = max(options.limit * 50, 500) if specific_food_query_info(options.query) else 50_000
+    for row in (report.get("results") or [])[:candidate_limit]:
         media_id = str(row.get("media_id") or "")
         if media_id:
             candidates[media_id] = {"sql_score": float(row.get("score") or 0.0), "sql_row": row, "expanded_terms": report.get("expanded_terms") or []}
@@ -246,9 +263,15 @@ def _merge_candidate(
     timestamp = str(row.get("captured_at") or row.get("fallback_captured_at") or "")
     date_value = timestamp[:10]
     expanded_terms = expand_visual_query_terms(query)
+    food_info = specific_food_query_info(query)
+    specific_terms = list(food_info.get("specific_terms") or []) if food_info else []
+    generic_terms = list(food_info.get("generic_terms") or []) if food_info else []
     matching_terms = _matched_terms(row, sql_candidate.get("expanded_terms") or expanded_terms)
+    specific_matches = matched_visual_terms_for_row(row, specific_terms) if specific_terms else []
+    generic_matches = matched_visual_terms_for_row(row, generic_terms) if generic_terms else []
     related_event = _related_event(repository, media_id, date_value, include_hidden=include_hidden)
     line_matches = _line_matches(repository, query, date_value, expanded_terms=expanded_terms)
+    person_context = _person_context_for_media(repository, query=query, media_id=media_id, event=related_event, date_value=date_value)
     evidence_types = _evidence_types(row, embedding_candidate, related_event=related_event, line_matches=line_matches)
     score_components = score_multimodal_components(
         row,
@@ -258,7 +281,12 @@ def _merge_candidate(
         line_matches=line_matches,
         sql_score=float(sql_candidate.get("sql_score") or 0.0),
         matched_terms=matching_terms,
+        query_intent="specific_food_search" if food_info else None,
+        specific_terms=specific_terms,
+        generic_terms=generic_terms,
     )
+    visual_match = bool(score_components.get("visual_match"))
+    _apply_person_scores(score_components, evidence_types, person_context)
     visual_match = bool(score_components.get("visual_match"))
     strength = compute_multimodal_evidence_strength(
         evidence_types=evidence_types,
@@ -282,8 +310,13 @@ def _merge_candidate(
             expanded_terms=sql_candidate.get("expanded_terms") or expanded_terms,
         ),
         "matched_terms": matching_terms,
+        "specific_food": food_info,
+        "specific_food_matched_terms": specific_matches,
+        "generic_food_matched_terms": generic_matches,
         "related_event": _event_label(related_event),
         "related_event_id": (related_event or {}).get("id"),
+        "related_persons": person_context.get("related_persons") or [],
+        "person_evidence_types": person_context.get("person_evidence_types") or [],
         "line_samples": line_matches[:5],
         "evidence_types": evidence_types,
         "evidence_strength": strength,
@@ -478,6 +511,133 @@ def _evidence_types(
     return list(dict.fromkeys(types))
 
 
+def _person_context_for_media(
+    repository: LifelogRepository,
+    *,
+    query: str,
+    media_id: str,
+    event: dict[str, Any] | None,
+    date_value: str,
+) -> dict[str, Any]:
+    resolution = resolve_persons_from_query(repository, query, public_mode=False)
+    person = resolution.resolved
+    if not person:
+        return {"person_query": resolution.query_name, "person_resolution_status": resolution.status}
+    person_id = str(person["id"])
+    label = str(person.get("display_name") or person.get("public_name") or "人物候補")
+    context: dict[str, Any] = {
+        "person_query": resolution.query_name,
+        "person_resolution_status": resolution.status,
+        "person_id": person_id,
+        "related_persons": [],
+        "person_evidence_types": [],
+        "person_score": 0.0,
+        "person_face_score": 0.0,
+        "person_line_score": 0.0,
+        "person_event_score": 0.0,
+    }
+    with connect(repository.db_path) as connection:
+        initialize_schema(connection)
+        media_match = connection.execute(
+            """
+            SELECT source, confidence
+            FROM media_people
+            JOIN persons ON persons.id = media_people.person_id
+            WHERE media_people.media_id = ?
+              AND media_people.person_id = ?
+              AND media_people.verified_by_user = 1
+              AND COALESCE(media_people.hidden, 0) = 0
+              AND persons.manual_verified = 1
+              AND COALESCE(persons.hidden, 0) = 0
+              AND COALESCE(persons.searchable, 1) = 1
+              AND persons.deleted_at IS NULL
+            LIMIT 1
+            """,
+            (media_id, person_id),
+        ).fetchone()
+        event_match = None
+        if event and event.get("id"):
+            event_match = connection.execute(
+                """
+                SELECT source, confidence, media_count, line_count
+                FROM event_people
+                JOIN persons ON persons.id = event_people.person_id
+                WHERE event_people.event_id = ?
+                  AND event_people.person_id = ?
+                  AND COALESCE(event_people.hidden, 0) = 0
+                  AND persons.manual_verified = 1
+                  AND COALESCE(persons.hidden, 0) = 0
+                  AND COALESCE(persons.searchable, 1) = 1
+                  AND persons.deleted_at IS NULL
+                ORDER BY confidence DESC
+                LIMIT 1
+                """,
+                (event.get("id"), person_id),
+            ).fetchone()
+        line_match_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM line_speaker_links
+            JOIN persons ON persons.id = line_speaker_links.person_id
+            JOIN line_messages
+              ON line_messages.chat_id = line_speaker_links.chat_id
+             AND line_messages.sender = line_speaker_links.speaker_name
+            WHERE line_speaker_links.person_id = ?
+              AND substr(line_messages.sent_at, 1, 10) = ?
+              AND line_speaker_links.verified_by_user = 1
+              AND persons.manual_verified = 1
+              AND COALESCE(persons.hidden, 0) = 0
+              AND COALESCE(persons.searchable, 1) = 1
+              AND persons.deleted_at IS NULL
+            """,
+            (person_id, date_value),
+        ).fetchone()[0]
+    if media_match:
+        context["related_persons"].append(label)
+        context["person_evidence_types"].extend(["media_people", str(media_match["source"] or "face_cluster")])
+        context["person_face_score"] = 1.0 if str(media_match["source"] or "") == "face_cluster" else 0.8
+    if event_match:
+        context["related_persons"].append(label)
+        context["person_evidence_types"].extend(["event_people", str(event_match["source"] or "manual")])
+        context["person_event_score"] = max(context["person_event_score"], float(event_match["confidence"] or 0.7))
+    if line_match_count:
+        context["related_persons"].append(label)
+        context["person_evidence_types"].append("line_speaker")
+        context["person_line_score"] = min(1.0, int(line_match_count) / 5)
+    context["related_persons"] = list(dict.fromkeys(context["related_persons"]))
+    context["person_evidence_types"] = list(dict.fromkeys(context["person_evidence_types"]))
+    context["person_score"] = max(
+        float(context["person_face_score"]),
+        float(context["person_event_score"]) * 0.85,
+        float(context["person_line_score"]) * 0.6,
+    )
+    return context
+
+
+def _apply_person_scores(
+    score_components: dict[str, float],
+    evidence_types: list[str],
+    person_context: dict[str, Any],
+) -> None:
+    person_query = bool(person_context.get("person_query"))
+    person_score = float(person_context.get("person_score") or 0.0)
+    person_line_score = float(person_context.get("person_line_score") or 0.0)
+    person_face_score = float(person_context.get("person_face_score") or 0.0)
+    person_event_score = float(person_context.get("person_event_score") or 0.0)
+    score_components["person_score"] = round(person_score, 3)
+    score_components["person_line_score"] = round(person_line_score, 3)
+    score_components["person_face_score"] = round(person_face_score, 3)
+    score_components["person_event_score"] = round(person_event_score, 3)
+    if person_score:
+        evidence_types.extend(["person", *list(person_context.get("person_evidence_types") or [])])
+        evidence_types[:] = list(dict.fromkeys(evidence_types))
+        if person_face_score:
+            score_components["visual_match"] = 1.0
+        score_components["final_score"] = round(min(0.95, float(score_components["final_score"]) + min(0.28, person_score * 0.28)), 3)
+    elif person_query:
+        score_components["final_score"] = round(float(score_components["final_score"]) * 0.55, 3)
+
+
 def _matched_fields(row: dict[str, Any], query: str, *, has_embedding: bool, expanded_terms: list[str] | None = None) -> list[str]:
     return matched_fields_for_row(row, expanded_terms or expand_visual_query_terms(query), has_embedding=has_embedding)
 
@@ -504,6 +664,10 @@ def _reasons(
         reasons.append("embedding similarity candidate")
     if "vlm" in evidence_types:
         reasons.append("VLM caption/tags available")
+    if score_components.get("specific_food_score", 0.0) > 0:
+        reasons.append("specific food term matched in visual/OCR cues")
+    elif score_components.get("generic_food_score", 0.0) > 0:
+        reasons.append("generic food term matched only; kept weak for specific dish query")
     if "ocr" in evidence_types:
         reasons.append("OCR text available")
     if line_matches:

@@ -6,6 +6,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from personal_lifelog_rag.db.repository import connect
+from personal_lifelog_rag.db.schema import initialize_schema
+from personal_lifelog_rag.faces.person_service import public_person_name
 from personal_lifelog_rag.retrieval.date_parser import DateRange
 
 
@@ -28,6 +31,7 @@ def search_timeline(
     keyword: str | None = None,
     limit: int = 50,
     include_hidden: bool = False,
+    public_mode: bool = False,
 ) -> TimelineSearchResult:
     extracted_keyword = keyword or extract_keyword(question)
     start_date = date_range.start_iso if date_range else None
@@ -40,6 +44,7 @@ def search_timeline(
         limit=limit,
         include_hidden=include_hidden,
     )
+    events = _with_related_people(repository, events, public_mode=public_mode)
     media_items = repository.list_media_items(
         start_date=start_date,
         end_date=end_date,
@@ -61,6 +66,60 @@ def search_timeline(
         line_messages=line_messages,
         timeline_items=build_timeline_items(line_messages=line_messages, media_items=media_items),
     )
+
+
+def _with_related_people(repository, events: list[dict[str, Any]], *, public_mode: bool) -> list[dict[str, Any]]:
+    event_ids = [str(event.get("id") or "") for event in events if event.get("id")]
+    if not event_ids:
+        return events
+    placeholders = ",".join("?" for _ in event_ids)
+    with connect(repository.db_path) as connection:
+        initialize_schema(connection)
+        rows = connection.execute(
+            f"""
+            SELECT event_people.event_id,
+                   event_people.source,
+                   event_people.confidence,
+                   event_people.media_count,
+                   event_people.line_count,
+                   persons.*
+            FROM event_people
+            JOIN persons ON persons.id = event_people.person_id
+            WHERE event_people.event_id IN ({placeholders})
+              AND COALESCE(event_people.hidden, 0) = 0
+              AND persons.manual_verified = 1
+              AND COALESCE(persons.hidden, 0) = 0
+              AND COALESCE(persons.event_usable, 1) = 1
+              AND persons.deleted_at IS NULL
+            ORDER BY event_people.confidence DESC, persons.display_name ASC
+            """,
+            event_ids,
+        ).fetchall()
+    people_by_event: dict[str, list[dict[str, Any]]] = {}
+    for index, row in enumerate(rows, start=1):
+        data = dict(row)
+        label = public_person_name(data, index=index) if public_mode else str(data.get("display_name") or data.get("public_name") or "人物候補")
+        if not label:
+            continue
+        people_by_event.setdefault(str(data["event_id"]), []).append(
+            {
+                "person_id": data.get("id"),
+                "label": label,
+                "source": data.get("source"),
+                "confidence": data.get("confidence"),
+                "media_count": data.get("media_count"),
+                "line_count": data.get("line_count"),
+            }
+        )
+    enriched = []
+    for event in events:
+        item = dict(event)
+        people = people_by_event.get(str(event.get("id") or ""), [])
+        if people:
+            item["related_people"] = people
+            item["related_persons_text"] = ", ".join(person["label"] for person in people[:5])
+        enriched.append(item)
+    return enriched
 
 
 def build_timeline_items(

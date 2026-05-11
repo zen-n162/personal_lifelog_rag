@@ -95,6 +95,98 @@ ocr:
     assert search_payload["results"][0]["media_id"] == "media_cli"
 
 
+def test_ocr_images_text_cues_only_cli(tmp_path: Path, capsys) -> None:
+    db_path = _seed_db(tmp_path)
+    repository = LifelogRepository(db_path)
+    repository.upsert_media_vlm(
+        media_id="media_cli",
+        caption="Screen with a visible menu label",
+        text_cues=["menu_label"],
+        contains_text_hint=True,
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+
+    code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "ocr-images",
+            "--date",
+            "2024-12-24",
+            "--engine",
+            "fake",
+            "--text-cues-only",
+            "--limit",
+            "5",
+            "--dry-run",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "- selected images: 1" in output
+
+
+def test_ocr_priority_cli_reports_reasons(tmp_path: Path, capsys) -> None:
+    db_path = _seed_db(tmp_path)
+    repository = LifelogRepository(db_path)
+    repository.upsert_media_vlm(
+        media_id="media_cli",
+        caption="A document label with visible text",
+        text_cues=["document_text"],
+        contains_text_hint=True,
+        confidence=0.8,
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+
+    code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "ocr-priority",
+            "--from",
+            "2024-12-24",
+            "--to",
+            "2024-12-24",
+            "--limit",
+            "5",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert payload["total"] == 1
+    assert payload["results"][0]["media_id"] == "media_cli"
+    assert "text_cues" in payload["results"][0]["priority_reason"]
+
+
+def test_retry_ocr_failed_dry_run_lists_rows(tmp_path: Path, capsys) -> None:
+    db_path = _seed_db(tmp_path)
+    repository = LifelogRepository(db_path)
+    repository.upsert_media_ocr(media_id="media_cli", status="engine_unavailable", ocr_engine="tesseract_cli")
+
+    code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "retry-ocr-failed",
+            "--date",
+            "2024-12-24",
+            "--limit",
+            "5",
+            "--dry-run",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert "Retry OCR failed dry-run" in output
+    assert "media_cli" in output
+
+
 def _seed_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "lifelog.sqlite"
     repository = LifelogRepository(db_path)

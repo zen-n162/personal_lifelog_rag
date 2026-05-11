@@ -13,6 +13,7 @@ from personal_lifelog_rag.retrieval.query_entities import (
     extract_query_entities,
     is_summary_query,
 )
+from personal_lifelog_rag.retrieval.food_taxonomy import detect_specific_food_query
 
 
 QueryIntent = Literal[
@@ -25,8 +26,17 @@ QueryIntent = Literal[
     "photo_activity",
     "image_search",
     "multimodal_image_search",
+    "specific_food_search",
     "food_photo_search",
     "place_photo_search",
+    "person_line_search",
+    "person_photo_search",
+    "person_event_search",
+    "person_place_search",
+    "person_activity_search",
+    "place_visit_search",
+    "place_activity_search",
+    "monthly_place_summary",
     "event_summary",
     "monthly_summary",
     "time_range_summary",
@@ -46,8 +56,17 @@ VALID_QUERY_INTENTS = {
     "photo_activity",
     "image_search",
     "multimodal_image_search",
+    "specific_food_search",
     "food_photo_search",
     "place_photo_search",
+    "person_line_search",
+    "person_photo_search",
+    "person_event_search",
+    "person_place_search",
+    "person_activity_search",
+    "place_visit_search",
+    "place_activity_search",
+    "monthly_place_summary",
     "event_summary",
     "monthly_summary",
     "time_range_summary",
@@ -57,7 +76,26 @@ VALID_QUERY_INTENTS = {
 }
 
 PLACE_HINTS = ("行った", "行く", "着いた", "着く", "到着", "どこ", "場所", "駅", "会った", "待ち合わせ")
-FOOD_HINTS = ("ご飯", "食事", "食べ", "ラーメン", "カフェ", "ランチ", "夜ご飯", "昼ご飯", "店")
+FOOD_HINTS = (
+    "ご飯",
+    "食事",
+    "食べ",
+    "ラーメン",
+    "そば",
+    "蕎麦",
+    "うどん",
+    "オムライス",
+    "カレー",
+    "寿司",
+    "すし",
+    "焼肉",
+    "ピザ",
+    "カフェ",
+    "ランチ",
+    "夜ご飯",
+    "昼ご飯",
+    "店",
+)
 CALL_HINTS = ("通話", "電話", "不在着信", "着信", "話した")
 MENTION_HINTS = ("アルバム", "写真送って", "話題", "言ってた")
 DATE_QA_HINTS = ("何して", "何があった", "なにして", "この日")
@@ -68,6 +106,8 @@ IMAGE_SEARCH_PATTERNS = (
     "の写真",
     "が写っている写真",
     "写っている写真",
+    "を食べた写真",
+    "食べた写真",
     "みたいな写真",
     "らしい写真",
     "を撮った日",
@@ -76,6 +116,7 @@ IMAGE_SEARCH_PATTERNS = (
 )
 LOCATION_SUMMARY_HINTS = ("よく行った場所", "行った場所", "場所をまとめ", "場所まとめ")
 PERSON_ACTIVITY_HINTS = ("会った", "出かけた", "会う")
+LINE_PERSON_HINTS = ("LINEした", "ラインした", "LINEが多", "LINE", "ライン", "話した", "話して")
 
 
 @dataclass(frozen=True)
@@ -150,6 +191,15 @@ def classify_query_intent(
         reasons.append("場所の集計・要約表現を検出")
         return _result("location_summary", 0.78, normalized, entities, "event_summary", reasons)
 
+    specific_food = detect_specific_food_query(normalized)
+    if specific_food and _looks_like_visual_content_query(normalized):
+        reasons.append(f"特定料理「{specific_food.display_name}」の写真検索表現を検出")
+        entities["specific_food"] = specific_food.key
+        entities["specific_food_display_name"] = specific_food.display_name
+        entities["food_terms"] = list(dict.fromkeys([specific_food.display_name, *specific_food.triggers]))
+        entities["activity"] = "food"
+        return _result("specific_food_search", 0.9, normalized, entities, "multimodal-search", reasons)
+
     if _looks_like_visual_content_query(normalized):
         reasons.append("写真・画像内容を探す表現を検出")
         entities.setdefault("activity", "photo")
@@ -174,8 +224,8 @@ def classify_query_intent(
         reasons.append("食事・カフェ系の語を検出")
         return _result("food_activity", 0.86, normalized, entities, "search", reasons)
 
-    if entities.get("person") and any(hint in normalized for hint in PERSON_ACTIVITY_HINTS):
-        reasons.append(f"人物候補「{entities['person']}」と交流表現を検出")
+    if entities.get("person") and any(hint in normalized for hint in (*PERSON_ACTIVITY_HINTS, *LINE_PERSON_HINTS)):
+        reasons.append(f"人物候補「{entities['person']}」と手動リンク前提の交流/LINE表現を検出")
         return _result("person_interaction", 0.78, normalized, entities, "search", reasons)
 
     if "話" in normalized or "話題" in normalized or any(hint in normalized for hint in MENTION_HINTS):

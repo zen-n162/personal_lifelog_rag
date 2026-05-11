@@ -154,6 +154,97 @@ def test_batch_qa_reuses_configured_multimodal_engine(tmp_path: Path, monkeypatc
     assert seen_engine_ids == [id(engine), id(engine)]
 
 
+def test_batch_qa_reads_queries_file_and_summary_only(tmp_path: Path, monkeypatch, capsys) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    queries_path = tmp_path / "queries.txt"
+    json_path = tmp_path / "queries.json"
+    queries_path.write_text(
+        "\n".join(
+            [
+                "# comment",
+                "2025年1月は何していた？",
+                "ステージの写真はいつ？",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_route_query(repository, query: str, **kwargs):
+        return RoutedQueryResult(
+            query=query,
+            intent="monthly_summary" if "1月" in query else "multimodal_image_search",
+            intent_confidence=0.9,
+            entities={},
+            routing="monthly-summary" if "1月" in query else "multimodal-search",
+            answer=f"{query} answer",
+            results=[{"date": "2025-01-03"}],
+            intent_reasons=["test"],
+        )
+
+    monkeypatch.setattr("personal_lifelog_rag.app.cli.route_query", fake_route_query)
+    exit_code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "batch-qa",
+            "--queries-file",
+            str(queries_path),
+            "--summary-only",
+            "--output-json",
+            str(json_path),
+        ]
+    )
+    capsys.readouterr()
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["summary"]["total"] == 2
+    assert payload["queries"][0]["answer"] == ""
+    assert payload["queries"][0]["answer_summary"]
+    assert payload["queries"][0]["top_dates"] == ["2025-01-03"]
+
+
+def test_batch_qa_fail_fast_stops_after_first_error(tmp_path: Path, monkeypatch, capsys) -> None:
+    db_path = tmp_path / "lifelog.sqlite"
+    json_path = tmp_path / "fail_fast.json"
+
+    def fake_route_query(repository, query: str, **kwargs):
+        if "失敗" in query:
+            raise RuntimeError("intentional test failure")
+        return RoutedQueryResult(
+            query=query,
+            intent="monthly_summary",
+            intent_confidence=0.9,
+            entities={},
+            routing="monthly-summary",
+            answer="月次要約です。",
+            results=[],
+            intent_reasons=["test"],
+        )
+
+    monkeypatch.setattr("personal_lifelog_rag.app.cli.route_query", fake_route_query)
+    exit_code = main(
+        [
+            "--db-path",
+            str(db_path),
+            "batch-qa",
+            "--query",
+            "失敗するquery",
+            "--query",
+            "実行されないquery",
+            "--fail-fast",
+            "--output-json",
+            str(json_path),
+        ]
+    )
+    capsys.readouterr()
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["failed"] == 1
+
+
 def _seed_batch_qa_records(repository: LifelogRepository) -> None:
     repository.add_media_item(
         id="media_batch_food",

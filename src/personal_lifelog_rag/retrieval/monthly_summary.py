@@ -7,6 +7,10 @@ import calendar
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
+from personal_lifelog_rag.db.repository import connect
+from personal_lifelog_rag.db.schema import initialize_schema
+from personal_lifelog_rag.faces.person_service import public_person_name
+from personal_lifelog_rag.places.location_store import public_place_label
 
 
 FOOD_TERMS = ("食事", "カフェ", "ご飯", "料理", "meal", "food", "rice", "cafe", "restaurant", "ramen")
@@ -24,6 +28,7 @@ def build_monthly_summary_report(
     include_hidden: bool = False,
     top_days_limit: int = 5,
     events_per_day: int = 5,
+    public: bool = False,
 ) -> dict[str, Any]:
     """Aggregate local evidence into a compact range summary."""
 
@@ -52,6 +57,8 @@ def build_monthly_summary_report(
     confidence_values = [value for value in confidence_values if value is not None]
     evidence_type_counts = Counter(str(row.get("evidence_type") or "unknown") for row in evidence_rows)
     category_counts = _category_counts(events, vlm_rows, call_rows)
+    place_summary = _place_summary(repository, start_date=start_date, end_date=end_date, public=public)
+    person_summary = _person_summary(repository, start_date=start_date, end_date=end_date, public=public)
     daily = _daily_rollup(
         events=events,
         media_items=media_items,
@@ -82,6 +89,8 @@ def build_monthly_summary_report(
         "call_events_count": len(call_rows),
         "call_status_counts": dict(sorted(Counter(str(row.get("call_status") or "unknown") for row in call_rows).items())),
         "category_counts": category_counts,
+        "place_summary": place_summary,
+        "person_summary": person_summary,
         "confidence_distribution": _confidence_distribution(confidence_values),
         "evidence_type_counts": dict(sorted(evidence_type_counts.items())),
         "representative_days": representative_days,
@@ -101,6 +110,10 @@ def format_monthly_summary(report: dict[str, Any]) -> str:
     top_titles = list(report["title_distribution"].items())[:5]
     main_titles = "、".join(f"{title}({count})" for title, count in top_titles) if top_titles else "目立つタイトルなし"
     active_categories = _active_category_text(categories)
+    place_summary = report.get("place_summary") or {}
+    person_summary = report.get("person_summary") or {}
+    place_category_text = _format_counts_inline(place_summary.get("category_counts") or {})
+    place_label_text = _format_counts_inline(place_summary.get("label_counts") or {})
     lines = [
         f"{range_label}の月次要約",
         "",
@@ -114,11 +127,32 @@ def format_monthly_summary(report: dict[str, Any]) -> str:
             "画像解析のみの手がかりは「候補」として扱っています。"
         ),
         f"全体の傾向: {active_categories}",
+        f"場所カテゴリ候補: {place_category_text}",
+        f"代表的な場所ラベル候補: {place_label_text}",
         f"イベントタイトル分布の上位: {main_titles}",
         f"confidence分布: {_format_counts_inline(report['confidence_distribution'])}",
-        "",
-        "代表日 top5:",
     ]
+    if person_summary.get("enabled") and person_summary.get("rows"):
+        lines.extend(
+            [
+                "手動リンク済み人物の関連候補:",
+                (
+                    f"- event_people={person_summary.get('event_people_count', 0)}, "
+                    f"media_people={person_summary.get('media_people_count', 0)}, "
+                    f"LINE={person_summary.get('line_message_count', 0)}, "
+                    f"calls={person_summary.get('call_count', 0)}"
+                ),
+            ]
+        )
+        for row in person_summary["rows"][:5]:
+            lines.append(
+                f"  - {row.get('label')}: events={row.get('event_count', 0)} "
+                f"media={row.get('media_count', 0)} line={row.get('line_count', 0)} calls={row.get('call_count', 0)}"
+            )
+        lines.append("  - 人物関連は手動リンク済みの範囲での候補です。関係性は推定していません。")
+    elif person_summary.get("public_hidden"):
+        lines.append("人物関連情報: public modeでは非表示です。")
+    lines.extend(["", "代表日 top5:"])
     for day in report["representative_days"]:
         lines.append(
             f"- {day['date']}: events={day['events_count']}, photos={day['photos']}, "
@@ -242,6 +276,7 @@ def _event_summary(event: dict[str, Any], evidence: list[dict[str, Any]]) -> dic
         "end_time": event.get("end_time"),
         "title": event.get("title"),
         "summary_preview": redact_text(event.get("summary"), max_chars=120),
+        "location_name": redact_text(event.get("location_name"), max_chars=80),
         "confidence": event.get("confidence"),
         "line_evidence_count": counts.get("line", 0),
         "photo_evidence_count": counts.get("photo", 0),
@@ -273,6 +308,174 @@ def _category_counts(events: list[dict[str, Any]], vlm_rows: list[dict[str, Any]
         "photo": _count_texts(event_texts, PHOTO_TERMS),
         "line": _count_texts(event_texts, LINE_TERMS),
         "call": _count_texts(event_texts, CALL_TERMS) + len(call_rows),
+    }
+
+
+def _place_summary(repository, *, start_date: str, end_date: str, public: bool = False) -> dict[str, Any]:
+    try:
+        with connect(repository.db_path) as connection:
+            initialize_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT places.id, places.display_name, places.public_name, places.category,
+                       places.privacy_level, COUNT(DISTINCT event_places.event_id) AS event_count
+                FROM event_places
+                JOIN places ON places.id = event_places.place_id
+                JOIN events ON events.id = event_places.event_id
+                WHERE substr(events.date, 1, 10) >= ?
+                  AND substr(events.date, 1, 10) <= ?
+                GROUP BY places.id
+                ORDER BY event_count DESC, places.category ASC, places.id ASC
+                LIMIT 20
+                """,
+                (start_date, end_date),
+            ).fetchall()
+    except Exception:
+        return {"category_counts": {}, "label_counts": {}}
+    category_counts: Counter[str] = Counter()
+    label_counts: Counter[str] = Counter()
+    for row in rows:
+        count = int(row["event_count"] or 0)
+        category = str(row["category"] or "other")
+        category_counts[category] += count
+        place = dict(row)
+        label = public_place_label(place) if public else str(row["display_name"] or row["public_name"] or category)
+        label_counts[label] += count
+    return {
+        "category_counts": dict(category_counts.most_common(8)),
+        "label_counts": dict(label_counts.most_common(8)),
+    }
+
+
+def _person_summary(repository, *, start_date: str, end_date: str, public: bool = False) -> dict[str, Any]:
+    if public:
+        return {"enabled": False, "public_hidden": True, "rows": []}
+    try:
+        with connect(repository.db_path) as connection:
+            initialize_schema(connection)
+            event_rows = connection.execute(
+                """
+                SELECT persons.*,
+                       COUNT(DISTINCT event_people.event_id) AS event_count
+                FROM event_people
+                JOIN persons ON persons.id = event_people.person_id
+                JOIN events ON events.id = event_people.event_id
+                WHERE substr(events.date, 1, 10) >= ?
+                  AND substr(events.date, 1, 10) <= ?
+                  AND event_people.hidden = 0
+                  AND persons.manual_verified = 1
+                  AND persons.hidden = 0
+                  AND persons.deleted_at IS NULL
+                GROUP BY persons.id
+                ORDER BY event_count DESC, persons.display_name ASC
+                LIMIT 20
+                """,
+                (start_date, end_date),
+            ).fetchall()
+            media_rows = connection.execute(
+                """
+                SELECT media_people.person_id, COUNT(DISTINCT media_people.media_id) AS media_count
+                FROM media_people
+                JOIN persons ON persons.id = media_people.person_id
+                JOIN media_items ON media_items.id = media_people.media_id
+                WHERE substr(COALESCE(media_items.captured_at, media_items.fallback_captured_at), 1, 10) >= ?
+                  AND substr(COALESCE(media_items.captured_at, media_items.fallback_captured_at), 1, 10) <= ?
+                  AND media_people.hidden = 0
+                  AND persons.manual_verified = 1
+                  AND persons.hidden = 0
+                  AND persons.deleted_at IS NULL
+                GROUP BY media_people.person_id
+                """,
+                (start_date, end_date),
+            ).fetchall()
+            line_rows = connection.execute(
+                """
+                SELECT line_speaker_links.person_id,
+                       COUNT(*) AS line_count
+                FROM line_speaker_links
+                JOIN persons ON persons.id = line_speaker_links.person_id
+                JOIN line_messages
+                  ON line_messages.chat_id = line_speaker_links.chat_id
+                 AND line_messages.sender = line_speaker_links.speaker_name
+                WHERE substr(line_messages.sent_at, 1, 10) >= ?
+                  AND substr(line_messages.sent_at, 1, 10) <= ?
+                  AND line_speaker_links.verified_by_user = 1
+                  AND persons.manual_verified = 1
+                  AND persons.hidden = 0
+                  AND persons.deleted_at IS NULL
+                GROUP BY line_speaker_links.person_id
+                """,
+                (start_date, end_date),
+            ).fetchall()
+            call_rows = connection.execute(
+                """
+                SELECT line_speaker_links.person_id,
+                       COUNT(*) AS call_count
+                FROM line_speaker_links
+                JOIN persons ON persons.id = line_speaker_links.person_id
+                JOIN line_call_events
+                  ON line_call_events.chat_id = line_speaker_links.chat_id
+                 AND line_call_events.sender = line_speaker_links.speaker_name
+                WHERE substr(line_call_events.sent_at, 1, 10) >= ?
+                  AND substr(line_call_events.sent_at, 1, 10) <= ?
+                  AND line_speaker_links.verified_by_user = 1
+                  AND persons.manual_verified = 1
+                  AND persons.hidden = 0
+                  AND persons.deleted_at IS NULL
+                GROUP BY line_speaker_links.person_id
+                """,
+                (start_date, end_date),
+            ).fetchall()
+            person_rows = connection.execute(
+                """
+                SELECT id, display_name, public_name
+                FROM persons
+                WHERE manual_verified = 1
+                  AND hidden = 0
+                  AND deleted_at IS NULL
+                """
+            ).fetchall()
+    except Exception:
+        return {"enabled": True, "rows": [], "event_people_count": 0, "media_people_count": 0, "line_message_count": 0, "call_count": 0}
+    media_counts = {str(row["person_id"]): int(row["media_count"] or 0) for row in media_rows}
+    line_counts = {str(row["person_id"]): int(row["line_count"] or 0) for row in line_rows}
+    call_counts = {str(row["person_id"]): int(row["call_count"] or 0) for row in call_rows}
+    labels = {str(row["id"]): str(row["display_name"] or row["public_name"] or row["id"]) for row in person_rows}
+    rows = []
+    seen_ids: set[str] = set()
+    for index, row in enumerate(event_rows, start=1):
+        person = dict(row)
+        person_id = str(person["id"])
+        seen_ids.add(person_id)
+        rows.append(
+            {
+                "person_id": person_id,
+                "label": str(person.get("display_name") or person.get("public_name") or f"人物{index}"),
+                "event_count": int(person.get("event_count") or 0),
+                "media_count": media_counts.get(person_id, 0),
+                "line_count": line_counts.get(person_id, 0),
+                "call_count": call_counts.get(person_id, 0),
+            }
+        )
+    for person_id in sorted((set(media_counts) | set(line_counts) | set(call_counts)) - seen_ids):
+        rows.append(
+            {
+                "person_id": person_id,
+                "label": labels.get(person_id, person_id),
+                "event_count": 0,
+                "media_count": media_counts.get(person_id, 0),
+                "line_count": line_counts.get(person_id, 0),
+                "call_count": call_counts.get(person_id, 0),
+            }
+        )
+    rows.sort(key=lambda row: (-(row["event_count"] + row["media_count"] + row["line_count"] + row["call_count"]), row["label"]))
+    return {
+        "enabled": True,
+        "rows": rows[:10],
+        "event_people_count": sum(row["event_count"] for row in rows),
+        "media_people_count": sum(row["media_count"] for row in rows),
+        "line_message_count": sum(row["line_count"] for row in rows),
+        "call_count": sum(row["call_count"] for row in rows),
     }
 
 

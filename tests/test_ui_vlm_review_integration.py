@@ -15,7 +15,7 @@ def test_search_result_review_action_is_visible_in_vlm_review_queue(tmp_path: Pa
     payload = multimodal_search_for_ui(repository, query="ステージの写真", backend="vlm_sql", limit=5)
 
     assert items[0]["media_id"] == "media_review_link"
-    assert payload["rows"][0][14] == "accepted"
+    assert payload["rows"][0][-1] == "accepted"
     assert "gps_lon" not in str(items)
 
 

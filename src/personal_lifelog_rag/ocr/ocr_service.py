@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,14 @@ class OcrImagesOptions:
     force: bool = False
     skip_existing: bool = False
     media_ids: list[str] | None = None
+    text_cues_only: bool = False
+    vlm_text_hint_only: bool = False
+    has_vlm_text: bool = False
+    ocr_priority: bool = False
+    contains_text_hint: bool = False
+    caption_keywords: tuple[str, ...] = ()
+    min_vlm_confidence: float | None = None
+    only_existing_files: bool = True
 
 
 def run_ocr_images(
@@ -44,11 +53,12 @@ def run_ocr_images(
     rows = repository.list_media_items(
         start_date=options.start_date,
         end_date=options.end_date,
-        limit=1_000_000 if options.media_ids else max(options.limit, 0),
+        limit=1_000_000,
     )
     if options.media_ids:
         allowed_ids = set(options.media_ids)
-        rows = [row for row in rows if str(row.get("id")) in allowed_ids][: max(options.limit, 0)]
+        rows = [row for row in rows if str(row.get("id")) in allowed_ids]
+    rows = _filter_ocr_targets(repository, rows, options)[: max(options.limit, 0)]
     report = OcrImagesReport(
         selected_images=len(rows),
         dry_run=options.dry_run,
@@ -80,17 +90,6 @@ def run_ocr_images(
             report.processed += 1
             continue
         image_path = Path(str(row.get("file_path") or "")).expanduser()
-        if not image_path.exists():
-            result = OcrResult(
-                engine=resolved_engine.name,
-                status="failed",
-                error_message="image file does not exist",
-            )
-            _save_result(repository, row, result, languages)
-            _add_report_row(report, row, result.status, result=result)
-            report.failed += 1
-            report.processed += 1
-            continue
         try:
             result = resolved_engine.recognize(image_path, languages)
         except Exception as exc:  # pragma: no cover - engine bugs should not stop a batch
@@ -247,6 +246,171 @@ def _should_skip_existing(existing: dict[str, Any] | None, options: OcrImagesOpt
     if options.skip_existing:
         return str(existing.get("status") or "") == "success"
     return str(existing.get("status") or "") == "success"
+
+
+def _filter_ocr_targets(repository, rows: list[dict[str, Any]], options: OcrImagesOptions) -> list[dict[str, Any]]:
+    scored_rows: list[tuple[int, dict[str, Any]]] = []
+    for row in rows:
+        if str(row.get("media_type") or "image") != "image":
+            continue
+        file_path = Path(str(row.get("file_path") or "")).expanduser()
+        if options.only_existing_files and not file_path.exists():
+            continue
+        media_id = str(row.get("id") or "")
+        override = repository.get_media_vlm_override(media_id) or {}
+        if int(override.get("is_hidden") or 0) or int(override.get("is_wrong") or 0):
+            continue
+        vlm = repository.get_media_vlm(media_id) or {}
+        existing = repository.get_media_ocr(media_id)
+        score, _ = _ocr_priority_score_and_reasons(vlm, caption_keywords=options.caption_keywords)
+        text_hint = bool(vlm.get("contains_text_hint"))
+        has_vlm_text = score > 0
+        if options.contains_text_hint and not text_hint:
+            continue
+        if options.min_vlm_confidence is not None:
+            try:
+                confidence = float(vlm.get("confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < options.min_vlm_confidence:
+                continue
+        if options.vlm_text_hint_only and not text_hint:
+            continue
+        if options.has_vlm_text and not has_vlm_text:
+            continue
+        if options.text_cues_only and not has_vlm_text:
+            continue
+        if options.ocr_priority:
+            status = str((existing or {}).get("status") or "")
+            if score <= 0:
+                continue
+            if status and status not in {"engine_unavailable", "failed"} and not options.force:
+                continue
+        scored_rows.append((score, row))
+    if options.ocr_priority:
+        scored_rows.sort(
+            key=lambda item: (
+                -item[0],
+                str(item[1].get("captured_at") or item[1].get("fallback_captured_at") or ""),
+                str(item[1].get("id") or ""),
+            )
+        )
+    return [row for _, row in scored_rows]
+
+
+def _ocr_priority_score(vlm: dict[str, Any]) -> int:
+    return _ocr_priority_score_and_reasons(vlm)[0]
+
+
+def _ocr_priority_score_and_reasons(vlm: dict[str, Any], *, caption_keywords: tuple[str, ...] = ()) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+    text_cues = _json_list(vlm.get("text_cues_json"))
+    if text_cues:
+        score += 5
+        reasons.append("text_cues")
+    if vlm.get("contains_text_hint"):
+        score += 4
+        reasons.append("contains_text_hint")
+    caption_blob = " ".join(
+        str(vlm.get(key) or "")
+        for key in (
+            "caption",
+            "short_caption",
+            "scene_tags_json",
+            "object_tags_json",
+            "activity_tags_json",
+            "food_cues_json",
+            "location_cues_json",
+            "text_cues_json",
+        )
+    ).lower()
+    default_keywords = {
+        "sign",
+        "text",
+        "menu",
+        "receipt",
+        "document",
+        "label",
+        "poster",
+        "ticket",
+        "screen",
+        "screenshot",
+        "storefront",
+        "billboard",
+        "handwritten",
+        "logo",
+        "package",
+    }
+    keywords = set(caption_keywords) if caption_keywords else default_keywords
+    matched_keywords = sorted(keyword for keyword in keywords if keyword and keyword.lower() in caption_blob)
+    score += len(matched_keywords)
+    reasons.extend(f"caption:{keyword}" for keyword in matched_keywords[:8])
+    return score, reasons
+
+
+def ocr_priority_candidates(
+    repository,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 50,
+    caption_keywords: tuple[str, ...] = (),
+    min_vlm_confidence: float | None = None,
+) -> list[dict[str, Any]]:
+    rows = repository.list_media_items(start_date=start_date, end_date=end_date, limit=1_000_000)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for row in rows:
+        if str(row.get("media_type") or "image") != "image":
+            continue
+        file_path = Path(str(row.get("file_path") or "")).expanduser()
+        if not file_path.exists():
+            continue
+        media_id = str(row.get("id") or "")
+        override = repository.get_media_vlm_override(media_id) or {}
+        if int(override.get("is_hidden") or 0) or int(override.get("is_wrong") or 0):
+            continue
+        vlm = repository.get_media_vlm(media_id) or {}
+        if min_vlm_confidence is not None:
+            try:
+                confidence = float(vlm.get("confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < min_vlm_confidence:
+                continue
+        score, reasons = _ocr_priority_score_and_reasons(vlm, caption_keywords=caption_keywords)
+        if score <= 0:
+            continue
+        existing = repository.get_media_ocr(media_id) or {}
+        candidates.append(
+            (
+                score,
+                {
+                    "media_id": media_id,
+                    "captured_at": row.get("captured_at") or row.get("fallback_captured_at") or "",
+                    "file_name": row.get("file_name") or "",
+                    "caption": redact_text(vlm.get("short_caption") or vlm.get("caption"), max_chars=120),
+                    "text_cues": _json_list(vlm.get("text_cues_json")),
+                    "priority_score": score,
+                    "priority_reason": ", ".join(reasons),
+                    "already_ocr_status": existing.get("status") or "",
+                },
+            )
+        )
+    candidates.sort(key=lambda item: (-item[0], str(item[1]["captured_at"]), str(item[1]["media_id"])))
+    return [row for _, row in candidates[: max(limit, 0)]]
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _add_report_row(

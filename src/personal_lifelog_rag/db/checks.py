@@ -15,7 +15,7 @@ SAMPLE_LIMIT = 10
 CHAT_ID_LIMIT = 20
 
 
-def run_db_check(db_path: str | Path) -> dict[str, Any]:
+def run_db_check(db_path: str | Path, *, fail_on_missing_files: bool = False) -> dict[str, Any]:
     """Return privacy-conscious DB integrity diagnostics."""
 
     with closing(connect(db_path)) as connection:
@@ -31,8 +31,16 @@ def run_db_check(db_path: str | Path) -> dict[str, Any]:
             "events": _event_checks(connection),
             "event_evidence": _event_evidence_checks(connection),
             "analysis_jobs": _analysis_job_checks(connection),
+            "location_places": _location_place_checks(connection),
+            "face_detections": _face_detection_checks(connection),
+            "face_detection_runs": _face_detection_run_checks(connection),
+            "face_embedding_clusters": _face_embedding_cluster_checks(connection),
+            "persons": _person_checks(connection),
+            "line_person_links": _line_person_link_checks(connection),
+            "person_event_media": _person_event_media_checks(connection),
+            "privacy_actions": _privacy_action_checks(connection),
         }
-    report["strict"] = _strict_summary(report)
+    report["strict"] = _strict_summary(report, fail_on_missing_files=fail_on_missing_files)
     return report
 
 
@@ -47,6 +55,14 @@ def format_db_check(report: dict[str, Any]) -> str:
     events = report["events"]
     evidence = report["event_evidence"]
     analysis_jobs = report["analysis_jobs"]
+    location_places = report["location_places"]
+    face_detections = report["face_detections"]
+    face_detection_runs = report["face_detection_runs"]
+    face_embedding_clusters = report["face_embedding_clusters"]
+    persons = report["persons"]
+    line_person_links = report["line_person_links"]
+    person_event_media = report["person_event_media"]
+    privacy_actions = report["privacy_actions"]
     strict = report["strict"]
 
     lines = ["DB integrity check", ""]
@@ -70,6 +86,8 @@ def format_db_check(report: dict[str, Any]) -> str:
     lines.extend(_sample_lines("duplicate file_path sample IDs", media["duplicate_file_path_sample_ids"]))
     lines.extend(_sample_lines("missing file sample IDs", media["missing_file_sample_ids"]))
     lines.extend(_sample_lines("missing thumbnail sample IDs", media["missing_thumbnail_sample_ids"]))
+    if media["missing_file_count"]:
+        lines.append("- warning: missing original files are skipped by OCR/VLM/embedding jobs unless restored")
 
     lines.extend(
         [
@@ -284,6 +302,202 @@ def format_db_check(report: dict[str, Any]) -> str:
     lines.extend(_sample_lines("orphan job item IDs", analysis_jobs["orphan_job_item_sample_ids"]))
     lines.extend(_sample_lines("invalid job IDs", analysis_jobs["invalid_job_status_sample_ids"]))
     lines.extend(_sample_lines("invalid job item IDs", analysis_jobs["invalid_item_status_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "location/place:",
+            f"- location_points total: {location_places['location_points_total']}",
+            f"- location_points invalid lat/lon: {location_places['location_points_invalid_lat_lon']}",
+            f"- location_points orphan media_id refs: {location_places['location_points_orphan_media_refs']}",
+            f"- location_points orphan event_id refs: {location_places['location_points_orphan_event_refs']}",
+            f"- location_points duplicate media_id: {location_places['location_points_duplicate_media_id']}",
+            f"- location_points invalid privacy_level: {location_places['location_points_invalid_privacy_level']}",
+            f"- place_clusters total: {location_places['place_clusters_total']}",
+            f"- place_clusters invalid centroid: {location_places['place_clusters_invalid_centroid']}",
+            f"- place_clusters point_count mismatch: {location_places['place_clusters_point_count_mismatch']}",
+            f"- place_clusters invalid radius: {location_places['place_clusters_invalid_radius']}",
+            f"- place_clusters invalid status: {location_places['place_clusters_invalid_status']}",
+            f"- places total: {location_places['places_total']}",
+            f"- places invalid privacy_level: {location_places['places_invalid_privacy_level']}",
+            f"- places invalid privacy flags: {location_places['places_invalid_privacy_flags']}",
+            f"- places orphan cluster_id: {location_places['places_orphan_cluster_refs']}",
+            f"- places duplicate display_name: {location_places['places_duplicate_display_name']}",
+            f"- event_places total: {location_places['event_places_total']}",
+            f"- event_places orphan event_id refs: {location_places['event_places_orphan_event_refs']}",
+            f"- event_places orphan place_id refs: {location_places['event_places_orphan_place_refs']}",
+            f"- event_places invalid confidence: {location_places['event_places_invalid_confidence']}",
+            f"- media_places total: {location_places['media_places_total']}",
+            f"- media_places orphan media_id refs: {location_places['media_places_orphan_media_refs']}",
+            f"- media_places orphan place_id refs: {location_places['media_places_orphan_place_refs']}",
+            f"- media_places invalid confidence: {location_places['media_places_invalid_confidence']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan location point media IDs", location_places["location_points_orphan_media_sample_ids"]))
+    lines.extend(_sample_lines("orphan event_places IDs", location_places["event_places_orphan_sample_ids"]))
+    lines.extend(_sample_lines("orphan media_places IDs", location_places["media_places_orphan_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "face_detections:",
+            f"- total: {face_detections['total']}",
+            "- status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(face_detections["status_counts"], "status"))
+    lines.append("- review_status counts:")
+    lines.extend(_count_rows_lines(face_detections["review_status_counts"], "review_status"))
+    lines.extend(
+        [
+            f"- orphan media_id refs: {face_detections['orphan_media_refs']}",
+            f"- invalid bbox: {face_detections['invalid_bbox']}",
+            f"- missing crop files: {face_detections['missing_crop_files']}",
+            f"- invalid review_status: {face_detections['invalid_review_status']}",
+            f"- invalid privacy_level: {face_detections['invalid_privacy_level']}",
+            f"- invalid hidden flag: {face_detections['invalid_hidden_flag']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan face media IDs", face_detections["orphan_media_sample_ids"]))
+    lines.extend(_sample_lines("invalid face bbox IDs", face_detections["invalid_bbox_sample_ids"]))
+    lines.extend(_sample_lines("missing face crop IDs", face_detections["missing_crop_sample_ids"]))
+    lines.extend(
+        [
+            "",
+            "face_detection_runs:",
+            f"- total: {face_detection_runs['total']}",
+            "- status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(face_detection_runs["status_counts"], "status"))
+    lines.extend(
+        [
+            f"- failed runs: {face_detection_runs['failed_runs']}",
+            f"- stale running runs: {face_detection_runs['stale_running_runs']}",
+            f"- invalid status: {face_detection_runs['invalid_status']}",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "face embeddings/clusters:",
+            f"- face_embeddings total: {face_embedding_clusters['face_embeddings_total']}",
+            "- face_embedding status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(face_embedding_clusters["face_embedding_status_counts"], "status"))
+    lines.extend(
+        [
+            f"- face_embeddings orphan face_id refs: {face_embedding_clusters['face_embeddings_orphan_face_refs']}",
+            f"- face_embeddings invalid dim: {face_embedding_clusters['face_embeddings_invalid_dim']}",
+            f"- face_embeddings success empty blob: {face_embedding_clusters['face_embeddings_success_empty_blob']}",
+            f"- face_embeddings unknown format: {face_embedding_clusters['face_embeddings_unknown_format']}",
+            f"- face_clusters total: {face_embedding_clusters['face_clusters_total']}",
+            "- face_cluster status counts:",
+        ]
+    )
+    lines.extend(_count_rows_lines(face_embedding_clusters["face_cluster_status_counts"], "status"))
+    lines.extend(
+        [
+            f"- face_clusters invalid representative_face_id: {face_embedding_clusters['face_clusters_invalid_representative_face']}",
+            f"- face_clusters invalid status: {face_embedding_clusters['face_clusters_invalid_status']}",
+            f"- face_clusters invalid privacy_level: {face_embedding_clusters['face_clusters_invalid_privacy_level']}",
+            f"- face_clusters empty cluster: {face_embedding_clusters['face_clusters_empty_cluster']}",
+            f"- face_clusters singleton count: {face_embedding_clusters['face_clusters_singleton_count']}",
+            f"- face_cluster_members orphan cluster_id refs: {face_embedding_clusters['face_cluster_members_orphan_cluster_refs']}",
+            f"- face_cluster_members orphan face_id refs: {face_embedding_clusters['face_cluster_members_orphan_face_refs']}",
+            f"- face_cluster_members duplicate members: {face_embedding_clusters['face_cluster_members_duplicate_member']}",
+            f"- face_cluster_members invalid distance: {face_embedding_clusters['face_cluster_members_invalid_distance']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan face embedding IDs", face_embedding_clusters["face_embeddings_orphan_sample_ids"]))
+    lines.extend(_sample_lines("invalid face cluster representative IDs", face_embedding_clusters["face_clusters_invalid_representative_sample_ids"]))
+    lines.extend(_sample_lines("orphan face cluster member IDs", face_embedding_clusters["face_cluster_members_orphan_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "persons:",
+            f"- total: {persons['persons_total']}",
+            f"- invalid privacy_level: {persons['persons_invalid_privacy_level']}",
+            f"- invalid privacy flags: {persons['persons_invalid_privacy_flags']}",
+            f"- hidden: {persons['persons_hidden']}",
+            f"- deleted: {persons['persons_deleted']}",
+            f"- deleted person links warning: {persons['persons_deleted_links_warning']}",
+            f"- duplicate display_name: {persons['persons_duplicate_display_name']}",
+            f"- public_alias missing public_name: {persons['persons_public_alias_missing_public_name']}",
+            f"- person_face_clusters total: {persons['person_face_clusters_total']}",
+            f"- person_face_clusters orphan person_id refs: {persons['person_face_clusters_orphan_person_refs']}",
+            f"- person_face_clusters orphan cluster_id refs: {persons['person_face_clusters_orphan_cluster_refs']}",
+            f"- person_face_clusters duplicate links: {persons['person_face_clusters_duplicate_links']}",
+            f"- person_face_clusters rejected cluster links: {persons['person_face_clusters_rejected_cluster_links']}",
+            f"- person_aliases total: {persons['person_aliases_total']}",
+            f"- person_aliases orphan person_id refs: {persons['person_aliases_orphan_person_refs']}",
+            f"- person_aliases duplicate aliases: {persons['person_aliases_duplicate_aliases']}",
+            f"- person_aliases invalid source: {persons['person_aliases_invalid_source']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan person face cluster links", persons["person_face_clusters_orphan_sample_ids"]))
+    lines.extend(_sample_lines("orphan person alias IDs", persons["person_aliases_orphan_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "line speaker/person links:",
+            f"- line_speaker_links total: {line_person_links['line_speaker_links_total']}",
+            f"- orphan person_id refs: {line_person_links['line_speaker_links_orphan_person_refs']}",
+            f"- empty speaker_name: {line_person_links['line_speaker_links_empty_speaker_name']}",
+            f"- empty chat_id: {line_person_links['line_speaker_links_empty_chat_id']}",
+            f"- duplicate links: {line_person_links['line_speaker_links_duplicate_links']}",
+            f"- invalid confidence: {line_person_links['line_speaker_links_invalid_confidence']}",
+            f"- person_line_mentions total: {line_person_links['person_line_mentions_total']}",
+            f"- person_line_mentions orphan person_id refs: {line_person_links['person_line_mentions_orphan_person_refs']}",
+            f"- person_line_mentions orphan message_id refs: {line_person_links['person_line_mentions_orphan_message_refs']}",
+            f"- person_line_mentions invalid mention_type: {line_person_links['person_line_mentions_invalid_mention_type']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan line speaker links", line_person_links["line_speaker_links_orphan_sample_ids"]))
+    lines.extend(_sample_lines("orphan person line mentions", line_person_links["person_line_mentions_orphan_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "person media/event links:",
+            f"- media_people total: {person_event_media['media_people_total']}",
+            f"- media_people orphan media_id refs: {person_event_media['media_people_orphan_media_refs']}",
+            f"- media_people orphan person_id refs: {person_event_media['media_people_orphan_person_refs']}",
+            f"- media_people orphan face_id refs: {person_event_media['media_people_orphan_face_refs']}",
+            f"- media_people orphan face_cluster_id refs: {person_event_media['media_people_orphan_cluster_refs']}",
+            f"- media_people invalid source: {person_event_media['media_people_invalid_source']}",
+            f"- media_people invalid confidence: {person_event_media['media_people_invalid_confidence']}",
+            f"- media_people invalid hidden flag: {person_event_media['media_people_invalid_hidden_flag']}",
+            f"- media_people deleted/hidden person links warning: {person_event_media['media_people_hidden_deleted_person_links']}",
+            f"- media_people unverified cluster links: {person_event_media['media_people_unverified_cluster_links']}",
+            f"- media_people rejected detection links: {person_event_media['media_people_rejected_detection_links']}",
+            f"- event_people total: {person_event_media['event_people_total']}",
+            f"- event_people orphan event_id refs: {person_event_media['event_people_orphan_event_refs']}",
+            f"- event_people orphan person_id refs: {person_event_media['event_people_orphan_person_refs']}",
+            f"- event_people invalid source: {person_event_media['event_people_invalid_source']}",
+            f"- event_people invalid confidence: {person_event_media['event_people_invalid_confidence']}",
+            f"- event_people invalid hidden flag: {person_event_media['event_people_invalid_hidden_flag']}",
+            f"- event_people deleted/hidden person links warning: {person_event_media['event_people_hidden_deleted_person_links']}",
+            f"- event_people duplicate links: {person_event_media['event_people_duplicate_links']}",
+            f"- event_people unverified person links: {person_event_media['event_people_unverified_person_links']}",
+        ]
+    )
+    lines.extend(_sample_lines("orphan media_people IDs", person_event_media["media_people_orphan_sample_ids"]))
+    lines.extend(_sample_lines("orphan event_people IDs", person_event_media["event_people_orphan_sample_ids"]))
+
+    lines.extend(
+        [
+            "",
+            "privacy actions:",
+            f"- total: {privacy_actions['privacy_actions_total']}",
+            f"- invalid action_type: {privacy_actions['privacy_actions_invalid_action_type']}",
+            f"- invalid target_type: {privacy_actions['privacy_actions_invalid_target_type']}",
+            f"- invalid mode: {privacy_actions['privacy_actions_invalid_mode']}",
+        ]
+    )
 
     lines.extend(["", "strict:"])
     lines.append(f"- ok: {strict['ok']}")
@@ -1064,7 +1278,1117 @@ def _analysis_job_checks(connection) -> dict[str, Any]:
     }
 
 
-def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
+def _location_place_checks(connection) -> dict[str, Any]:
+    location_privacy = ("exact_private", "approximate_private", "public_hidden", "public_place_label")
+    cluster_statuses = ("unreviewed", "accepted", "rejected", "merged")
+    place_privacy = ("private", "public_label", "public_hidden")
+    location_privacy_placeholders = ", ".join("?" for _ in location_privacy)
+    cluster_status_placeholders = ", ".join("?" for _ in cluster_statuses)
+    place_privacy_placeholders = ", ".join("?" for _ in place_privacy)
+    return {
+        "location_points_total": _count(connection, "SELECT COUNT(*) FROM location_points"),
+        "location_points_invalid_lat_lon": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM location_points
+            WHERE lat IS NULL OR lon IS NULL
+               OR lat < -90 OR lat > 90
+               OR lon < -180 OR lon > 180
+            """,
+        ),
+        "location_points_orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM location_points
+            LEFT JOIN media_items ON media_items.id = location_points.media_id
+            WHERE location_points.media_id IS NOT NULL
+              AND media_items.id IS NULL
+            """,
+        ),
+        "location_points_orphan_media_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT location_points.media_id AS id
+            FROM location_points
+            LEFT JOIN media_items ON media_items.id = location_points.media_id
+            WHERE location_points.media_id IS NOT NULL
+              AND media_items.id IS NULL
+            ORDER BY location_points.media_id ASC
+            LIMIT ?
+            """,
+        ),
+        "location_points_orphan_event_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM location_points
+            LEFT JOIN events ON events.id = location_points.event_id
+            WHERE location_points.event_id IS NOT NULL
+              AND events.id IS NULL
+            """,
+        ),
+        "location_points_duplicate_media_id": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT media_id
+                FROM location_points
+                WHERE media_id IS NOT NULL
+                GROUP BY media_id
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "location_points_invalid_privacy_level": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM location_points
+            WHERE privacy_level IS NULL OR privacy_level NOT IN ({location_privacy_placeholders})
+            """,
+            list(location_privacy),
+        ),
+        "place_clusters_total": _count(connection, "SELECT COUNT(*) FROM place_clusters"),
+        "place_clusters_invalid_centroid": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM place_clusters
+            WHERE centroid_lat IS NULL OR centroid_lon IS NULL
+               OR centroid_lat < -90 OR centroid_lat > 90
+               OR centroid_lon < -180 OR centroid_lon > 180
+            """,
+        ),
+        "place_clusters_point_count_mismatch": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM place_clusters
+            LEFT JOIN (
+                SELECT cluster_id, COUNT(*) AS actual_count
+                FROM location_points
+                WHERE cluster_id IS NOT NULL
+                GROUP BY cluster_id
+            ) point_counts ON point_counts.cluster_id = place_clusters.id
+            WHERE COALESCE(place_clusters.point_count, 0) != COALESCE(point_counts.actual_count, 0)
+            """,
+        ),
+        "place_clusters_invalid_radius": _count(
+            connection,
+            "SELECT COUNT(*) FROM place_clusters WHERE radius_m IS NULL OR radius_m < 0",
+        ),
+        "place_clusters_invalid_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM place_clusters
+            WHERE status IS NULL OR status NOT IN ({cluster_status_placeholders})
+            """,
+            list(cluster_statuses),
+        ),
+        "places_total": _count(connection, "SELECT COUNT(*) FROM places"),
+        "places_invalid_privacy_level": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM places
+            WHERE privacy_level IS NULL OR privacy_level NOT IN ({place_privacy_placeholders})
+            """,
+            list(place_privacy),
+        ),
+        "places_invalid_privacy_flags": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM places
+            WHERE COALESCE(hidden, 0) NOT IN (0, 1)
+               OR COALESCE(searchable, 1) NOT IN (0, 1)
+            """,
+        ),
+        "places_orphan_cluster_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM places
+            LEFT JOIN place_clusters ON place_clusters.id = places.cluster_id
+            WHERE places.cluster_id IS NOT NULL
+              AND place_clusters.id IS NULL
+            """,
+        ),
+        "places_duplicate_display_name": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT display_name
+                FROM places
+                WHERE display_name IS NOT NULL AND TRIM(display_name) != ''
+                GROUP BY display_name
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "event_places_total": _count(connection, "SELECT COUNT(*) FROM event_places"),
+        "event_places_orphan_event_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_places
+            LEFT JOIN events ON events.id = event_places.event_id
+            WHERE events.id IS NULL
+            """,
+        ),
+        "event_places_orphan_place_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_places
+            LEFT JOIN places ON places.id = event_places.place_id
+            WHERE places.id IS NULL
+            """,
+        ),
+        "event_places_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT event_places.event_id || ':' || event_places.place_id AS id
+            FROM event_places
+            LEFT JOIN events ON events.id = event_places.event_id
+            LEFT JOIN places ON places.id = event_places.place_id
+            WHERE events.id IS NULL OR places.id IS NULL
+            ORDER BY event_places.event_id ASC, event_places.place_id ASC
+            LIMIT ?
+            """,
+        ),
+        "event_places_invalid_confidence": _count(
+            connection,
+            "SELECT COUNT(*) FROM event_places WHERE confidence IS NULL OR confidence < 0 OR confidence > 1",
+        ),
+        "media_places_total": _count(connection, "SELECT COUNT(*) FROM media_places"),
+        "media_places_orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_places
+            LEFT JOIN media_items ON media_items.id = media_places.media_id
+            WHERE media_items.id IS NULL
+            """,
+        ),
+        "media_places_orphan_place_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_places
+            LEFT JOIN places ON places.id = media_places.place_id
+            WHERE places.id IS NULL
+            """,
+        ),
+        "media_places_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT media_places.media_id || ':' || media_places.place_id AS id
+            FROM media_places
+            LEFT JOIN media_items ON media_items.id = media_places.media_id
+            LEFT JOIN places ON places.id = media_places.place_id
+            WHERE media_items.id IS NULL OR places.id IS NULL
+            ORDER BY media_places.media_id ASC, media_places.place_id ASC
+            LIMIT ?
+            """,
+        ),
+        "media_places_invalid_confidence": _count(
+            connection,
+            "SELECT COUNT(*) FROM media_places WHERE confidence IS NULL OR confidence < 0 OR confidence > 1",
+        ),
+    }
+
+
+def _face_detection_checks(connection) -> dict[str, Any]:
+    valid_statuses = ("success", "failed", "skipped", "engine_unavailable", "no_face_detected")
+    valid_review_statuses = ("unreviewed", "accepted", "rejected", "bad_detection")
+    valid_privacy_levels = ("private",)
+    status_placeholders = ", ".join("?" for _ in valid_statuses)
+    review_placeholders = ", ".join("?" for _ in valid_review_statuses)
+    privacy_placeholders = ", ".join("?" for _ in valid_privacy_levels)
+    missing_crop_rows = _rows(
+        connection,
+        """
+        SELECT id, crop_path, thumbnail_path
+        FROM face_detections
+        WHERE status = 'success'
+          AND (
+            (crop_path IS NOT NULL AND TRIM(crop_path) != '')
+            OR (thumbnail_path IS NOT NULL AND TRIM(thumbnail_path) != '')
+          )
+        """,
+    )
+    missing_crop_ids = []
+    for row in missing_crop_rows:
+        crop_path = row.get("crop_path")
+        thumbnail_path = row.get("thumbnail_path")
+        if (crop_path and not Path(str(crop_path)).expanduser().exists()) or (
+            thumbnail_path and not Path(str(thumbnail_path)).expanduser().exists()
+        ):
+            missing_crop_ids.append(str(row.get("id")))
+    return {
+        "total": _count(connection, "SELECT COUNT(*) FROM face_detections"),
+        "status_counts": _rows(
+            connection,
+            "SELECT status, COUNT(*) AS count FROM face_detections GROUP BY status ORDER BY count DESC, status ASC",
+        ),
+        "review_status_counts": _rows(
+            connection,
+            "SELECT review_status, COUNT(*) AS count FROM face_detections GROUP BY review_status ORDER BY count DESC, review_status ASC",
+        ),
+        "orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_detections
+            LEFT JOIN media_items ON media_items.id = face_detections.media_id
+            WHERE media_items.id IS NULL
+            """,
+        ),
+        "orphan_media_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT face_detections.media_id AS id
+            FROM face_detections
+            LEFT JOIN media_items ON media_items.id = face_detections.media_id
+            WHERE media_items.id IS NULL
+            ORDER BY face_detections.media_id ASC
+            LIMIT ?
+            """,
+        ),
+        "invalid_bbox": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE status = 'success'
+              AND (
+                bbox_x IS NULL OR bbox_y IS NULL OR bbox_w IS NULL OR bbox_h IS NULL
+                OR bbox_x < 0 OR bbox_y < 0 OR bbox_w <= 0 OR bbox_h <= 0
+                OR (image_width IS NOT NULL AND bbox_x + bbox_w > image_width + 1)
+                OR (image_height IS NOT NULL AND bbox_y + bbox_h > image_height + 1)
+              )
+            """,
+        ),
+        "invalid_bbox_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT id
+            FROM face_detections
+            WHERE status = 'success'
+              AND (
+                bbox_x IS NULL OR bbox_y IS NULL OR bbox_w IS NULL OR bbox_h IS NULL
+                OR bbox_x < 0 OR bbox_y < 0 OR bbox_w <= 0 OR bbox_h <= 0
+                OR (image_width IS NOT NULL AND bbox_x + bbox_w > image_width + 1)
+                OR (image_height IS NOT NULL AND bbox_y + bbox_h > image_height + 1)
+              )
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+        ),
+        "missing_crop_files": len(missing_crop_ids),
+        "missing_crop_sample_ids": missing_crop_ids[:SAMPLE_LIMIT],
+        "invalid_review_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE review_status IS NULL OR review_status NOT IN ({review_placeholders})
+            """,
+            list(valid_review_statuses),
+        ),
+        "invalid_privacy_level": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE privacy_level IS NULL OR privacy_level NOT IN ({privacy_placeholders})
+            """,
+            list(valid_privacy_levels),
+        ),
+        "invalid_hidden_flag": _count(
+            connection,
+            "SELECT COUNT(*) FROM face_detections WHERE COALESCE(hidden, 0) NOT IN (0, 1)",
+        ),
+        "invalid_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE status IS NULL OR status NOT IN ({status_placeholders})
+            """,
+            list(valid_statuses),
+        ),
+    }
+
+
+def _face_detection_run_checks(connection) -> dict[str, Any]:
+    valid_statuses = ("planned", "running", "completed", "failed", "partial", "canceled")
+    status_placeholders = ", ".join("?" for _ in valid_statuses)
+    return {
+        "total": _count(connection, "SELECT COUNT(*) FROM face_detection_runs"),
+        "status_counts": _rows(
+            connection,
+            "SELECT status, COUNT(*) AS count FROM face_detection_runs GROUP BY status ORDER BY count DESC, status ASC",
+        ),
+        "failed_runs": _count(connection, "SELECT COUNT(*) FROM face_detection_runs WHERE status = 'failed'"),
+        "stale_running_runs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_detection_runs
+            WHERE status = 'running'
+              AND started_at IS NOT NULL
+              AND datetime(started_at) < datetime('now', '-12 hours')
+            """,
+        ),
+        "invalid_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_detection_runs
+            WHERE status IS NULL OR status NOT IN ({status_placeholders})
+            """,
+            list(valid_statuses),
+        ),
+    }
+
+
+def _face_embedding_cluster_checks(connection) -> dict[str, Any]:
+    embedding_statuses = ("success", "failed", "skipped", "engine_unavailable")
+    embedding_formats = ("float32_numpy",)
+    cluster_statuses = ("unreviewed", "accepted", "rejected", "merged", "split")
+    cluster_review_statuses = ("unreviewed", "reviewed", "bad_cluster")
+    privacy_levels = ("private",)
+    embedding_status_placeholders = ", ".join("?" for _ in embedding_statuses)
+    format_placeholders = ", ".join("?" for _ in embedding_formats)
+    cluster_status_placeholders = ", ".join("?" for _ in cluster_statuses)
+    cluster_review_placeholders = ", ".join("?" for _ in cluster_review_statuses)
+    privacy_placeholders = ", ".join("?" for _ in privacy_levels)
+    return {
+        "face_embeddings_total": _count(connection, "SELECT COUNT(*) FROM face_embeddings"),
+        "face_embedding_status_counts": _rows(
+            connection,
+            "SELECT status, COUNT(*) AS count FROM face_embeddings GROUP BY status ORDER BY count DESC, status ASC",
+        ),
+        "face_embeddings_orphan_face_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_embeddings
+            LEFT JOIN face_detections ON face_detections.id = face_embeddings.face_id
+            WHERE face_detections.id IS NULL
+            """,
+        ),
+        "face_embeddings_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT face_embeddings.face_id AS id
+            FROM face_embeddings
+            LEFT JOIN face_detections ON face_detections.id = face_embeddings.face_id
+            WHERE face_detections.id IS NULL
+            ORDER BY face_embeddings.face_id ASC
+            LIMIT ?
+            """,
+        ),
+        "face_embeddings_invalid_dim": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_embeddings
+            WHERE status = 'success'
+              AND embedding_format = 'float32_numpy'
+              AND (
+                embedding_dim IS NULL OR embedding_dim <= 0
+                OR embedding_blob IS NULL
+                OR length(embedding_blob) != embedding_dim * 4
+              )
+            """,
+        ),
+        "face_embeddings_success_empty_blob": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_embeddings
+            WHERE status = 'success'
+              AND (embedding_blob IS NULL OR length(embedding_blob) = 0)
+            """,
+        ),
+        "face_embeddings_unknown_format": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_embeddings
+            WHERE embedding_format IS NULL OR embedding_format NOT IN ({format_placeholders})
+            """,
+            list(embedding_formats),
+        ),
+        "face_embeddings_invalid_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_embeddings
+            WHERE status IS NULL OR status NOT IN ({embedding_status_placeholders})
+            """,
+            list(embedding_statuses),
+        ),
+        "face_clusters_total": _count(connection, "SELECT COUNT(*) FROM face_clusters"),
+        "face_cluster_status_counts": _rows(
+            connection,
+            "SELECT status, COUNT(*) AS count FROM face_clusters GROUP BY status ORDER BY count DESC, status ASC",
+        ),
+        "face_clusters_invalid_representative_face": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_clusters
+            LEFT JOIN face_detections ON face_detections.id = face_clusters.representative_face_id
+            WHERE face_clusters.representative_face_id IS NOT NULL
+              AND face_detections.id IS NULL
+            """,
+        ),
+        "face_clusters_invalid_representative_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT face_clusters.representative_face_id AS id
+            FROM face_clusters
+            LEFT JOIN face_detections ON face_detections.id = face_clusters.representative_face_id
+            WHERE face_clusters.representative_face_id IS NOT NULL
+              AND face_detections.id IS NULL
+            ORDER BY face_clusters.representative_face_id ASC
+            LIMIT ?
+            """,
+        ),
+        "face_clusters_invalid_status": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_clusters
+            WHERE status IS NULL OR status NOT IN ({cluster_status_placeholders})
+               OR review_status IS NULL OR review_status NOT IN ({cluster_review_placeholders})
+            """,
+            list(cluster_statuses) + list(cluster_review_statuses),
+        ),
+        "face_clusters_invalid_privacy_level": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM face_clusters
+            WHERE privacy_level IS NULL OR privacy_level NOT IN ({privacy_placeholders})
+            """,
+            list(privacy_levels),
+        ),
+        "face_clusters_empty_cluster": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_clusters
+            LEFT JOIN (
+                SELECT cluster_id, COUNT(*) AS actual_count
+                FROM face_cluster_members
+                GROUP BY cluster_id
+            ) counts ON counts.cluster_id = face_clusters.id
+            WHERE COALESCE(counts.actual_count, 0) = 0
+               OR COALESCE(face_clusters.face_count, 0) != COALESCE(counts.actual_count, 0)
+            """,
+        ),
+        "face_clusters_singleton_count": _count(connection, "SELECT COUNT(*) FROM face_clusters WHERE face_count = 1"),
+        "face_cluster_members_orphan_cluster_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_cluster_members
+            LEFT JOIN face_clusters ON face_clusters.id = face_cluster_members.cluster_id
+            WHERE face_clusters.id IS NULL
+            """,
+        ),
+        "face_cluster_members_orphan_face_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_cluster_members
+            LEFT JOIN face_detections ON face_detections.id = face_cluster_members.face_id
+            WHERE face_detections.id IS NULL
+            """,
+        ),
+        "face_cluster_members_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT face_cluster_members.cluster_id || ':' || face_cluster_members.face_id AS id
+            FROM face_cluster_members
+            LEFT JOIN face_clusters ON face_clusters.id = face_cluster_members.cluster_id
+            LEFT JOIN face_detections ON face_detections.id = face_cluster_members.face_id
+            WHERE face_clusters.id IS NULL OR face_detections.id IS NULL
+            ORDER BY face_cluster_members.cluster_id ASC, face_cluster_members.face_id ASC
+            LIMIT ?
+            """,
+        ),
+        "face_cluster_members_duplicate_member": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT cluster_id, face_id
+                FROM face_cluster_members
+                GROUP BY cluster_id, face_id
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "face_cluster_members_invalid_distance": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM face_cluster_members
+            WHERE distance_to_centroid IS NOT NULL
+              AND (distance_to_centroid < 0 OR distance_to_centroid > 2)
+            """,
+        ),
+    }
+
+
+def _person_checks(connection) -> dict[str, Any]:
+    privacy_levels = ("private", "public_alias", "public_hidden")
+    alias_sources = ("manual", "line_speaker", "nickname")
+    privacy_placeholders = ", ".join("?" for _ in privacy_levels)
+    alias_source_placeholders = ", ".join("?" for _ in alias_sources)
+    return {
+        "persons_total": _count(connection, "SELECT COUNT(*) FROM persons"),
+        "person_privacy_counts": _rows(
+            connection,
+            "SELECT privacy_level, COUNT(*) AS count FROM persons GROUP BY privacy_level ORDER BY count DESC, privacy_level ASC",
+        ),
+        "persons_invalid_privacy_level": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM persons
+            WHERE privacy_level IS NULL OR privacy_level NOT IN ({privacy_placeholders})
+            """,
+            list(privacy_levels),
+        ),
+        "persons_invalid_privacy_flags": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM persons
+            WHERE COALESCE(hidden, 0) NOT IN (0, 1)
+               OR COALESCE(searchable, 1) NOT IN (0, 1)
+               OR COALESCE(event_usable, 1) NOT IN (0, 1)
+            """,
+        ),
+        "persons_hidden": _count(connection, "SELECT COUNT(*) FROM persons WHERE COALESCE(hidden, 0) = 1"),
+        "persons_deleted": _count(connection, "SELECT COUNT(*) FROM persons WHERE deleted_at IS NOT NULL"),
+        "persons_deleted_links_warning": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM persons
+            WHERE deleted_at IS NOT NULL
+              AND (
+                EXISTS (SELECT 1 FROM event_people WHERE event_people.person_id = persons.id AND COALESCE(event_people.hidden, 0) = 0)
+                OR EXISTS (SELECT 1 FROM media_people WHERE media_people.person_id = persons.id AND COALESCE(media_people.hidden, 0) = 0)
+              )
+            """,
+        ),
+        "persons_duplicate_display_name": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT display_name
+                FROM persons
+                WHERE deleted_at IS NULL
+                  AND COALESCE(hidden, 0) = 0
+                  AND COALESCE(searchable, 1) = 1
+                GROUP BY display_name
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "persons_public_alias_missing_public_name": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM persons
+            WHERE privacy_level = 'public_alias'
+              AND (public_name IS NULL OR trim(public_name) = '')
+            """,
+        ),
+        "person_face_clusters_total": _count(connection, "SELECT COUNT(*) FROM person_face_clusters"),
+        "person_face_clusters_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_face_clusters
+            LEFT JOIN persons ON persons.id = person_face_clusters.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "person_face_clusters_orphan_cluster_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_face_clusters
+            LEFT JOIN face_clusters ON face_clusters.id = person_face_clusters.face_cluster_id
+            WHERE face_clusters.id IS NULL
+            """,
+        ),
+        "person_face_clusters_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT person_face_clusters.person_id || ':' || person_face_clusters.face_cluster_id AS id
+            FROM person_face_clusters
+            LEFT JOIN persons ON persons.id = person_face_clusters.person_id
+            LEFT JOIN face_clusters ON face_clusters.id = person_face_clusters.face_cluster_id
+            WHERE persons.id IS NULL OR face_clusters.id IS NULL
+            ORDER BY person_face_clusters.person_id ASC, person_face_clusters.face_cluster_id ASC
+            LIMIT ?
+            """,
+        ),
+        "person_face_clusters_duplicate_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT person_id, face_cluster_id
+                FROM person_face_clusters
+                GROUP BY person_id, face_cluster_id
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "person_face_clusters_rejected_cluster_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_face_clusters
+            JOIN face_clusters ON face_clusters.id = person_face_clusters.face_cluster_id
+            WHERE face_clusters.status = 'rejected' OR face_clusters.review_status = 'bad_cluster'
+            """,
+        ),
+        "person_aliases_total": _count(connection, "SELECT COUNT(*) FROM person_aliases"),
+        "person_aliases_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_aliases
+            LEFT JOIN persons ON persons.id = person_aliases.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "person_aliases_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT person_aliases.id AS id
+            FROM person_aliases
+            LEFT JOIN persons ON persons.id = person_aliases.person_id
+            WHERE persons.id IS NULL
+            ORDER BY person_aliases.id ASC
+            LIMIT ?
+            """,
+        ),
+        "person_aliases_duplicate_aliases": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT person_id, alias
+                FROM person_aliases
+                GROUP BY person_id, alias
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "person_aliases_invalid_source": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM person_aliases
+            WHERE source IS NULL OR source NOT IN ({alias_source_placeholders})
+            """,
+            list(alias_sources),
+        ),
+    }
+
+
+def _line_person_link_checks(connection) -> dict[str, Any]:
+    mention_types = ("speaker", "mentioned_in_text")
+    mention_placeholders = ", ".join("?" for _ in mention_types)
+    return {
+        "line_speaker_links_total": _count(connection, "SELECT COUNT(*) FROM line_speaker_links"),
+        "line_speaker_links_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM line_speaker_links
+            LEFT JOIN persons ON persons.id = line_speaker_links.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "line_speaker_links_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT line_speaker_links.id AS id
+            FROM line_speaker_links
+            LEFT JOIN persons ON persons.id = line_speaker_links.person_id
+            WHERE persons.id IS NULL
+            ORDER BY line_speaker_links.id ASC
+            LIMIT ?
+            """,
+        ),
+        "line_speaker_links_empty_speaker_name": _count(
+            connection,
+            "SELECT COUNT(*) FROM line_speaker_links WHERE speaker_name IS NULL OR trim(speaker_name) = ''",
+        ),
+        "line_speaker_links_empty_chat_id": _count(
+            connection,
+            "SELECT COUNT(*) FROM line_speaker_links WHERE chat_id IS NULL OR trim(chat_id) = ''",
+        ),
+        "line_speaker_links_duplicate_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT chat_id, speaker_name, person_id
+                FROM line_speaker_links
+                GROUP BY chat_id, speaker_name, person_id
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "line_speaker_links_invalid_confidence": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM line_speaker_links
+            WHERE confidence IS NULL OR confidence < 0 OR confidence > 1
+            """,
+        ),
+        "person_line_mentions_total": _count(connection, "SELECT COUNT(*) FROM person_line_mentions"),
+        "person_line_mentions_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_line_mentions
+            LEFT JOIN persons ON persons.id = person_line_mentions.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "person_line_mentions_orphan_message_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM person_line_mentions
+            LEFT JOIN line_messages ON line_messages.id = person_line_mentions.message_id
+            WHERE line_messages.id IS NULL
+            """,
+        ),
+        "person_line_mentions_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT person_line_mentions.id AS id
+            FROM person_line_mentions
+            LEFT JOIN persons ON persons.id = person_line_mentions.person_id
+            LEFT JOIN line_messages ON line_messages.id = person_line_mentions.message_id
+            WHERE persons.id IS NULL OR line_messages.id IS NULL
+            ORDER BY person_line_mentions.id ASC
+            LIMIT ?
+            """,
+        ),
+        "person_line_mentions_invalid_mention_type": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM person_line_mentions
+            WHERE mention_type IS NULL OR mention_type NOT IN ({mention_placeholders})
+            """,
+            list(mention_types),
+        ),
+    }
+
+
+def _person_event_media_checks(connection) -> dict[str, Any]:
+    media_sources = ("face_cluster", "manual")
+    event_sources = ("face", "line_speaker", "line_mention", "manual", "combined")
+    media_placeholders = ", ".join("?" for _ in media_sources)
+    event_placeholders = ", ".join("?" for _ in event_sources)
+    return {
+        "media_people_total": _count(connection, "SELECT COUNT(*) FROM media_people"),
+        "media_people_source_counts": _rows(
+            connection,
+            "SELECT source, COUNT(*) AS count FROM media_people GROUP BY source ORDER BY count DESC, source ASC",
+        ),
+        "media_people_orphan_media_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            LEFT JOIN media_items ON media_items.id = media_people.media_id
+            WHERE media_items.id IS NULL
+            """,
+        ),
+        "media_people_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            LEFT JOIN persons ON persons.id = media_people.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "media_people_orphan_face_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            LEFT JOIN face_detections ON face_detections.id = media_people.face_id
+            WHERE media_people.face_id IS NOT NULL
+              AND face_detections.id IS NULL
+            """,
+        ),
+        "media_people_orphan_cluster_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            LEFT JOIN face_clusters ON face_clusters.id = media_people.face_cluster_id
+            WHERE media_people.face_cluster_id IS NOT NULL
+              AND face_clusters.id IS NULL
+            """,
+        ),
+        "media_people_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT media_people.media_id || ':' || media_people.person_id || ':' || media_people.source AS id
+            FROM media_people
+            LEFT JOIN media_items ON media_items.id = media_people.media_id
+            LEFT JOIN persons ON persons.id = media_people.person_id
+            LEFT JOIN face_detections ON face_detections.id = media_people.face_id
+            LEFT JOIN face_clusters ON face_clusters.id = media_people.face_cluster_id
+            WHERE media_items.id IS NULL
+               OR persons.id IS NULL
+               OR (media_people.face_id IS NOT NULL AND face_detections.id IS NULL)
+               OR (media_people.face_cluster_id IS NOT NULL AND face_clusters.id IS NULL)
+            ORDER BY media_people.media_id ASC, media_people.person_id ASC
+            LIMIT ?
+            """,
+        ),
+        "media_people_invalid_source": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM media_people
+            WHERE source IS NULL OR source NOT IN ({media_placeholders})
+            """,
+            list(media_sources),
+        ),
+        "media_people_invalid_confidence": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            WHERE confidence IS NULL OR confidence < 0 OR confidence > 1
+            """,
+        ),
+        "media_people_invalid_hidden_flag": _count(
+            connection,
+            "SELECT COUNT(*) FROM media_people WHERE COALESCE(hidden, 0) NOT IN (0, 1)",
+        ),
+        "media_people_hidden_deleted_person_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            JOIN persons ON persons.id = media_people.person_id
+            WHERE COALESCE(media_people.hidden, 0) = 0
+              AND (COALESCE(persons.hidden, 0) = 1 OR persons.deleted_at IS NOT NULL)
+            """,
+        ),
+        "media_people_unverified_cluster_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            LEFT JOIN face_clusters ON face_clusters.id = media_people.face_cluster_id
+            LEFT JOIN person_face_clusters
+              ON person_face_clusters.person_id = media_people.person_id
+             AND person_face_clusters.face_cluster_id = media_people.face_cluster_id
+            LEFT JOIN persons ON persons.id = media_people.person_id
+            WHERE media_people.source = 'face_cluster'
+              AND (
+                COALESCE(media_people.verified_by_user, 0) != 1
+                OR COALESCE(person_face_clusters.verified_by_user, 0) != 1
+                OR COALESCE(persons.manual_verified, 0) != 1
+                OR face_clusters.status != 'accepted'
+                OR face_clusters.review_status = 'bad_cluster'
+              )
+            """,
+        ),
+        "media_people_rejected_detection_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM media_people
+            JOIN face_detections ON face_detections.id = media_people.face_id
+            WHERE media_people.source = 'face_cluster'
+              AND (
+                face_detections.status != 'success'
+                OR face_detections.review_status IN ('rejected', 'bad_detection')
+              )
+            """,
+        ),
+        "event_people_total": _count(connection, "SELECT COUNT(*) FROM event_people"),
+        "event_people_source_counts": _rows(
+            connection,
+            "SELECT source, COUNT(*) AS count FROM event_people GROUP BY source ORDER BY count DESC, source ASC",
+        ),
+        "event_people_orphan_event_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_people
+            LEFT JOIN events ON events.id = event_people.event_id
+            WHERE events.id IS NULL
+            """,
+        ),
+        "event_people_orphan_person_refs": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_people
+            LEFT JOIN persons ON persons.id = event_people.person_id
+            WHERE persons.id IS NULL
+            """,
+        ),
+        "event_people_orphan_sample_ids": _sample_query(
+            connection,
+            """
+            SELECT event_people.event_id || ':' || event_people.person_id || ':' || event_people.source AS id
+            FROM event_people
+            LEFT JOIN events ON events.id = event_people.event_id
+            LEFT JOIN persons ON persons.id = event_people.person_id
+            WHERE events.id IS NULL OR persons.id IS NULL
+            ORDER BY event_people.event_id ASC, event_people.person_id ASC
+            LIMIT ?
+            """,
+        ),
+        "event_people_invalid_source": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM event_people
+            WHERE source IS NULL OR source NOT IN ({event_placeholders})
+            """,
+            list(event_sources),
+        ),
+        "event_people_invalid_confidence": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_people
+            WHERE confidence IS NULL OR confidence < 0 OR confidence > 1
+               OR evidence_count < 0 OR media_count < 0 OR line_count < 0
+            """,
+        ),
+        "event_people_invalid_hidden_flag": _count(
+            connection,
+            "SELECT COUNT(*) FROM event_people WHERE COALESCE(hidden, 0) NOT IN (0, 1)",
+        ),
+        "event_people_hidden_deleted_person_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_people
+            JOIN persons ON persons.id = event_people.person_id
+            WHERE COALESCE(event_people.hidden, 0) = 0
+              AND (COALESCE(persons.hidden, 0) = 1 OR persons.deleted_at IS NOT NULL)
+            """,
+        ),
+        "event_people_duplicate_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT event_id, person_id, source
+                FROM event_people
+                GROUP BY event_id, person_id, source
+                HAVING COUNT(*) > 1
+            )
+            """,
+        ),
+        "event_people_unverified_person_links": _count(
+            connection,
+            """
+            SELECT COUNT(*)
+            FROM event_people
+            JOIN persons ON persons.id = event_people.person_id
+            WHERE COALESCE(persons.manual_verified, 0) != 1
+            """,
+        ),
+    }
+
+
+def _privacy_action_checks(connection) -> dict[str, Any]:
+    action_types = (
+        "hide_person",
+        "unhide_person",
+        "delete_person",
+        "detach_person",
+        "delete_face_embedding",
+        "delete_face_crop",
+        "hide_place",
+        "hide_media",
+        "export_person",
+        "privacy_audit",
+    )
+    target_types = ("person", "face", "face_cluster", "place", "media", "event", "portfolio", "database")
+    modes = ("dry_run", "executed")
+    action_placeholders = ", ".join("?" for _ in action_types)
+    target_placeholders = ", ".join("?" for _ in target_types)
+    mode_placeholders = ", ".join("?" for _ in modes)
+    return {
+        "privacy_actions_total": _count(connection, "SELECT COUNT(*) FROM privacy_actions"),
+        "privacy_action_type_counts": _rows(
+            connection,
+            "SELECT action_type, COUNT(*) AS count FROM privacy_actions GROUP BY action_type ORDER BY count DESC, action_type ASC",
+        ),
+        "privacy_actions_invalid_action_type": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM privacy_actions
+            WHERE action_type IS NULL OR action_type NOT IN ({action_placeholders})
+            """,
+            list(action_types),
+        ),
+        "privacy_actions_invalid_target_type": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM privacy_actions
+            WHERE target_type IS NULL OR target_type NOT IN ({target_placeholders})
+            """,
+            list(target_types),
+        ),
+        "privacy_actions_invalid_mode": _count_params(
+            connection,
+            f"""
+            SELECT COUNT(*)
+            FROM privacy_actions
+            WHERE mode IS NULL OR mode NOT IN ({mode_placeholders})
+            """,
+            list(modes),
+        ),
+    }
+
+
+def _strict_summary(report: dict[str, Any], *, fail_on_missing_files: bool = False) -> dict[str, Any]:
     media = report["media_items"]
     media_ocr = report["media_ocr"]
     media_vlm = report["media_vlm"]
@@ -1075,6 +2399,14 @@ def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
     events = report["events"]
     evidence = report["event_evidence"]
     analysis_jobs = report["analysis_jobs"]
+    location_places = report["location_places"]
+    face_detections = report["face_detections"]
+    face_detection_runs = report["face_detection_runs"]
+    face_embedding_clusters = report["face_embedding_clusters"]
+    persons = report["persons"]
+    line_person_links = report["line_person_links"]
+    person_event_media = report["person_event_media"]
+    privacy_actions = report["privacy_actions"]
     issues: list[str] = []
 
     if line["duplicate_id_groups"]:
@@ -1085,6 +2417,8 @@ def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
         issues.append(f"line_call_events negative duration_sec: {calls['negative_duration_sec']}")
     if media["duplicate_file_path_groups"]:
         issues.append(f"duplicate file_path groups: {media['duplicate_file_path_groups']}")
+    if fail_on_missing_files and media["missing_file_count"]:
+        issues.append(f"missing original media files: {media['missing_file_count']}")
     if media["duplicate_file_hash_groups"]:
         issues.append(f"duplicate file_hash groups: {media['duplicate_file_hash_groups']}")
     if media["file_hash_null"] >= _file_hash_null_threshold(media["total"]):
@@ -1135,6 +2469,167 @@ def _strict_summary(report: dict[str, Any]) -> dict[str, Any]:
         issues.append(f"analysis_job_items invalid status rows: {analysis_jobs['invalid_item_status_count']}")
     if analysis_jobs["item_count_mismatch"]:
         issues.append(f"analysis_jobs item count mismatch: {analysis_jobs['item_count_mismatch']}")
+    if location_places["location_points_invalid_lat_lon"]:
+        issues.append(f"location_points invalid lat/lon rows: {location_places['location_points_invalid_lat_lon']}")
+    if location_places["location_points_orphan_media_refs"]:
+        issues.append(f"location_points orphan media refs: {location_places['location_points_orphan_media_refs']}")
+    if location_places["location_points_orphan_event_refs"]:
+        issues.append(f"location_points orphan event refs: {location_places['location_points_orphan_event_refs']}")
+    if location_places["location_points_invalid_privacy_level"]:
+        issues.append(f"location_points invalid privacy_level rows: {location_places['location_points_invalid_privacy_level']}")
+    if location_places["place_clusters_invalid_centroid"]:
+        issues.append(f"place_clusters invalid centroid rows: {location_places['place_clusters_invalid_centroid']}")
+    if location_places["place_clusters_invalid_radius"]:
+        issues.append(f"place_clusters invalid radius rows: {location_places['place_clusters_invalid_radius']}")
+    if location_places["place_clusters_invalid_status"]:
+        issues.append(f"place_clusters invalid status rows: {location_places['place_clusters_invalid_status']}")
+    if location_places["places_invalid_privacy_level"]:
+        issues.append(f"places invalid privacy_level rows: {location_places['places_invalid_privacy_level']}")
+    if location_places["places_invalid_privacy_flags"]:
+        issues.append(f"places invalid privacy flag rows: {location_places['places_invalid_privacy_flags']}")
+    if location_places["places_orphan_cluster_refs"]:
+        issues.append(f"places orphan cluster refs: {location_places['places_orphan_cluster_refs']}")
+    if location_places["event_places_orphan_event_refs"]:
+        issues.append(f"event_places orphan event refs: {location_places['event_places_orphan_event_refs']}")
+    if location_places["event_places_orphan_place_refs"]:
+        issues.append(f"event_places orphan place refs: {location_places['event_places_orphan_place_refs']}")
+    if location_places["event_places_invalid_confidence"]:
+        issues.append(f"event_places invalid confidence rows: {location_places['event_places_invalid_confidence']}")
+    if location_places["media_places_orphan_media_refs"]:
+        issues.append(f"media_places orphan media refs: {location_places['media_places_orphan_media_refs']}")
+    if location_places["media_places_orphan_place_refs"]:
+        issues.append(f"media_places orphan place refs: {location_places['media_places_orphan_place_refs']}")
+    if location_places["media_places_invalid_confidence"]:
+        issues.append(f"media_places invalid confidence rows: {location_places['media_places_invalid_confidence']}")
+    if face_detections["orphan_media_refs"]:
+        issues.append(f"face_detections orphan media refs: {face_detections['orphan_media_refs']}")
+    if face_detections["invalid_bbox"]:
+        issues.append(f"face_detections invalid bbox rows: {face_detections['invalid_bbox']}")
+    if face_detections["invalid_status"]:
+        issues.append(f"face_detections invalid status rows: {face_detections['invalid_status']}")
+    if face_detections["invalid_review_status"]:
+        issues.append(f"face_detections invalid review_status rows: {face_detections['invalid_review_status']}")
+    if face_detections["invalid_privacy_level"]:
+        issues.append(f"face_detections invalid privacy_level rows: {face_detections['invalid_privacy_level']}")
+    if face_detections["invalid_hidden_flag"]:
+        issues.append(f"face_detections invalid hidden flag rows: {face_detections['invalid_hidden_flag']}")
+    if face_detection_runs["invalid_status"]:
+        issues.append(f"face_detection_runs invalid status rows: {face_detection_runs['invalid_status']}")
+    if face_embedding_clusters["face_embeddings_orphan_face_refs"]:
+        issues.append(f"face_embeddings orphan face refs: {face_embedding_clusters['face_embeddings_orphan_face_refs']}")
+    if face_embedding_clusters["face_embeddings_invalid_status"]:
+        issues.append(f"face_embeddings invalid status rows: {face_embedding_clusters['face_embeddings_invalid_status']}")
+    if face_embedding_clusters["face_embeddings_success_empty_blob"]:
+        issues.append(f"face_embeddings success empty blob rows: {face_embedding_clusters['face_embeddings_success_empty_blob']}")
+    if face_embedding_clusters["face_embeddings_invalid_dim"]:
+        issues.append(f"face_embeddings invalid dim rows: {face_embedding_clusters['face_embeddings_invalid_dim']}")
+    if face_embedding_clusters["face_embeddings_unknown_format"]:
+        issues.append(f"face_embeddings unknown format rows: {face_embedding_clusters['face_embeddings_unknown_format']}")
+    if face_embedding_clusters["face_clusters_invalid_representative_face"]:
+        issues.append(
+            "face_clusters invalid representative_face_id rows: "
+            f"{face_embedding_clusters['face_clusters_invalid_representative_face']}"
+        )
+    if face_embedding_clusters["face_clusters_invalid_status"]:
+        issues.append(f"face_clusters invalid status rows: {face_embedding_clusters['face_clusters_invalid_status']}")
+    if face_embedding_clusters["face_clusters_invalid_privacy_level"]:
+        issues.append(
+            f"face_clusters invalid privacy_level rows: {face_embedding_clusters['face_clusters_invalid_privacy_level']}"
+        )
+    if face_embedding_clusters["face_clusters_empty_cluster"]:
+        issues.append(f"face_clusters empty/mismatched rows: {face_embedding_clusters['face_clusters_empty_cluster']}")
+    if face_embedding_clusters["face_cluster_members_orphan_cluster_refs"]:
+        issues.append(
+            f"face_cluster_members orphan cluster refs: {face_embedding_clusters['face_cluster_members_orphan_cluster_refs']}"
+        )
+    if face_embedding_clusters["face_cluster_members_orphan_face_refs"]:
+        issues.append(
+            f"face_cluster_members orphan face refs: {face_embedding_clusters['face_cluster_members_orphan_face_refs']}"
+        )
+    if face_embedding_clusters["face_cluster_members_invalid_distance"]:
+        issues.append(
+            f"face_cluster_members invalid distance rows: {face_embedding_clusters['face_cluster_members_invalid_distance']}"
+        )
+    if persons["persons_invalid_privacy_level"]:
+        issues.append(f"persons invalid privacy_level rows: {persons['persons_invalid_privacy_level']}")
+    if persons["persons_invalid_privacy_flags"]:
+        issues.append(f"persons invalid privacy flag rows: {persons['persons_invalid_privacy_flags']}")
+    if persons["person_face_clusters_orphan_person_refs"]:
+        issues.append(
+            f"person_face_clusters orphan person refs: {persons['person_face_clusters_orphan_person_refs']}"
+        )
+    if persons["person_face_clusters_orphan_cluster_refs"]:
+        issues.append(
+            f"person_face_clusters orphan cluster refs: {persons['person_face_clusters_orphan_cluster_refs']}"
+        )
+    if persons["person_aliases_orphan_person_refs"]:
+        issues.append(f"person_aliases orphan person refs: {persons['person_aliases_orphan_person_refs']}")
+    if persons["person_aliases_invalid_source"]:
+        issues.append(f"person_aliases invalid source rows: {persons['person_aliases_invalid_source']}")
+    if line_person_links["line_speaker_links_orphan_person_refs"]:
+        issues.append(
+            f"line_speaker_links orphan person refs: {line_person_links['line_speaker_links_orphan_person_refs']}"
+        )
+    if line_person_links["line_speaker_links_empty_speaker_name"]:
+        issues.append(
+            f"line_speaker_links empty speaker_name rows: {line_person_links['line_speaker_links_empty_speaker_name']}"
+        )
+    if line_person_links["line_speaker_links_empty_chat_id"]:
+        issues.append(f"line_speaker_links empty chat_id rows: {line_person_links['line_speaker_links_empty_chat_id']}")
+    if line_person_links["line_speaker_links_invalid_confidence"]:
+        issues.append(
+            f"line_speaker_links invalid confidence rows: {line_person_links['line_speaker_links_invalid_confidence']}"
+        )
+    if line_person_links["person_line_mentions_orphan_person_refs"]:
+        issues.append(
+            f"person_line_mentions orphan person refs: {line_person_links['person_line_mentions_orphan_person_refs']}"
+        )
+    if line_person_links["person_line_mentions_orphan_message_refs"]:
+        issues.append(
+            f"person_line_mentions orphan message refs: {line_person_links['person_line_mentions_orphan_message_refs']}"
+        )
+    if line_person_links["person_line_mentions_invalid_mention_type"]:
+        issues.append(
+            f"person_line_mentions invalid mention_type rows: {line_person_links['person_line_mentions_invalid_mention_type']}"
+        )
+    if person_event_media["media_people_orphan_media_refs"]:
+        issues.append(f"media_people orphan media refs: {person_event_media['media_people_orphan_media_refs']}")
+    if person_event_media["media_people_orphan_person_refs"]:
+        issues.append(f"media_people orphan person refs: {person_event_media['media_people_orphan_person_refs']}")
+    if person_event_media["media_people_orphan_face_refs"]:
+        issues.append(f"media_people orphan face refs: {person_event_media['media_people_orphan_face_refs']}")
+    if person_event_media["media_people_orphan_cluster_refs"]:
+        issues.append(f"media_people orphan cluster refs: {person_event_media['media_people_orphan_cluster_refs']}")
+    if person_event_media["media_people_invalid_source"]:
+        issues.append(f"media_people invalid source rows: {person_event_media['media_people_invalid_source']}")
+    if person_event_media["media_people_invalid_confidence"]:
+        issues.append(f"media_people invalid confidence rows: {person_event_media['media_people_invalid_confidence']}")
+    if person_event_media["media_people_invalid_hidden_flag"]:
+        issues.append(f"media_people invalid hidden flag rows: {person_event_media['media_people_invalid_hidden_flag']}")
+    if person_event_media["media_people_unverified_cluster_links"]:
+        issues.append(
+            f"media_people unverified/rejected cluster links: {person_event_media['media_people_unverified_cluster_links']}"
+        )
+    if person_event_media["media_people_rejected_detection_links"]:
+        issues.append(
+            f"media_people rejected/bad detection links: {person_event_media['media_people_rejected_detection_links']}"
+        )
+    if person_event_media["event_people_orphan_event_refs"]:
+        issues.append(f"event_people orphan event refs: {person_event_media['event_people_orphan_event_refs']}")
+    if person_event_media["event_people_orphan_person_refs"]:
+        issues.append(f"event_people orphan person refs: {person_event_media['event_people_orphan_person_refs']}")
+    if person_event_media["event_people_invalid_source"]:
+        issues.append(f"event_people invalid source rows: {person_event_media['event_people_invalid_source']}")
+    if person_event_media["event_people_invalid_confidence"]:
+        issues.append(f"event_people invalid confidence rows: {person_event_media['event_people_invalid_confidence']}")
+    if person_event_media["event_people_invalid_hidden_flag"]:
+        issues.append(f"event_people invalid hidden flag rows: {person_event_media['event_people_invalid_hidden_flag']}")
+    if privacy_actions["privacy_actions_invalid_action_type"]:
+        issues.append(f"privacy_actions invalid action_type rows: {privacy_actions['privacy_actions_invalid_action_type']}")
+    if privacy_actions["privacy_actions_invalid_target_type"]:
+        issues.append(f"privacy_actions invalid target_type rows: {privacy_actions['privacy_actions_invalid_target_type']}")
+    if privacy_actions["privacy_actions_invalid_mode"]:
+        issues.append(f"privacy_actions invalid mode rows: {privacy_actions['privacy_actions_invalid_mode']}")
 
     return {
         "ok": not issues,

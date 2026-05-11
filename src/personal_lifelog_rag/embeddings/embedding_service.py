@@ -46,6 +46,7 @@ def build_image_embeddings(
             limit=1_000_000,
         )
         if str(row.get("media_type") or "image") == "image"
+        and Path(str(row.get("file_path") or "")).expanduser().exists()
     ]
     if options.media_ids:
         allowed_ids = set(options.media_ids)
@@ -129,6 +130,11 @@ def build_text_embeddings(
         end_date=options.end_date,
         limit=1_000_000,
     )
+    candidate_rows = [
+        row
+        for row in candidate_rows
+        if Path(str(row.get("file_path") or "")).expanduser().exists()
+    ]
     if options.media_ids:
         allowed_ids = set(options.media_ids)
         candidate_rows = [row for row in candidate_rows if str(row.get("id")) in allowed_ids]

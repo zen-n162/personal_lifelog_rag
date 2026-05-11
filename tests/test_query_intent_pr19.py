@@ -84,3 +84,19 @@ def test_classify_visual_content_photo_queries_as_multimodal_image_search() -> N
 
         assert result.intent == "multimodal_image_search"
         assert result.routing_hint == "multimodal-search"
+
+
+def test_classify_specific_food_photo_queries() -> None:
+    for query in (
+        "ラーメンの写真はいつ？",
+        "そばの写真はいつ？",
+        "オムライスの写真はいつ？",
+        "カレーを食べた写真はいつ？",
+        "カレーを食べた写真",
+        "寿司の写真はいつ？",
+    ):
+        result = classify_query_intent(query)
+
+        assert result.intent == "specific_food_search"
+        assert result.routing_hint == "multimodal-search"
+        assert result.entities["specific_food"]

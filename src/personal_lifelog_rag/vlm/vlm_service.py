@@ -9,7 +9,10 @@ import traceback
 from typing import Any
 
 from personal_lifelog_rag.core.privacy import redact_text
-from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms
+from personal_lifelog_rag.db.repository import connect
+from personal_lifelog_rag.db.schema import initialize_schema
+from personal_lifelog_rag.retrieval.person_place_qa import resolve_persons_from_query
+from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms, specific_food_query_info
 from personal_lifelog_rag.vlm.base import VlmEngine
 from personal_lifelog_rag.vlm.engines import get_vlm_engine
 from personal_lifelog_rag.vlm.prompts import (
@@ -114,6 +117,7 @@ def run_vlm_images(
                 status="failed",
                 error_message=_exception_message("VLM failed", exc),
             )
+        result = _fail_empty_success_caption(result)
         _save_result(repository, row, result)
         _count_result(report, result.status)
         _add_report_row(report, row, result.status, result=result)
@@ -166,6 +170,8 @@ def vlm_stats(repository, *, start_date: str | None = None, end_date: str | None
 
 def image_search(repository, options: ImageSearchOptions) -> dict[str, Any]:
     terms = expand_visual_query_terms(options.query)
+    person_resolution = resolve_persons_from_query(repository, options.query, public_mode=False)
+    resolved_person = person_resolution.resolved
     records = repository.search_text_records(
         terms=terms,
         start_date=options.date_from,
@@ -188,13 +194,31 @@ def image_search(repository, options: ImageSearchOptions) -> dict[str, Any]:
             rows_by_media.setdefault(media_id, {}).update(vlm)
     for media_id, row in list(rows_by_media.items()):
         _merge_vlm_override_columns(repository, media_id, row)
+    person_rows_by_media = (
+        _person_media_search_rows(
+            repository,
+            person_id=str(resolved_person["id"]),
+            date_from=options.date_from,
+            date_to=options.date_to,
+            limit=20_000,
+        )
+        if resolved_person
+        else {}
+    )
+    for media_id, person_row in person_rows_by_media.items():
+        rows_by_media.setdefault(media_id, {}).update(person_row)
+    for row in rows_by_media.values():
+        row["_person_query"] = bool(resolved_person)
 
     effective_rows = [
         apply_vlm_override_to_result(row)
         for row in rows_by_media.values()
         if should_use_vlm_for_search(row, include_hidden=options.include_hidden)
     ]
-    effective_rows = [row for row in effective_rows if _row_matches_visual_terms(row, raw_query=options.query, terms=terms)]
+    effective_rows = [
+        row for row in effective_rows
+        if _row_matches_visual_terms(row, raw_query=options.query, terms=terms) or row.get("person_match")
+    ]
     results = [_image_result(repository, row, options.query, terms=terms) for row in effective_rows]
     results = [row for row in results if row["date"]]
     results.sort(key=lambda row: (-row["score"], row["date"], row["media_id"]))
@@ -206,6 +230,11 @@ def image_search(repository, options: ImageSearchOptions) -> dict[str, Any]:
         "date_to": options.date_to,
         "total": len(results),
         "results": results[: max(options.limit, 0)],
+        "person_resolution": {
+            "status": person_resolution.status,
+            "query_name": person_resolution.query_name,
+            "resolved_person_id": resolved_person.get("id") if resolved_person else None,
+        },
     }
 
 
@@ -231,6 +260,75 @@ def _merge_vlm_override_columns(repository, media_id: str, row: dict[str, Any]) 
             "vlm_review_note": override.get("review_note"),
         }
     )
+
+
+def _person_media_search_rows(
+    repository,
+    *,
+    person_id: str,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> dict[str, dict[str, Any]]:
+    clauses = [
+        "media_people.person_id = ?",
+        "media_people.verified_by_user = 1",
+        "COALESCE(media_people.hidden, 0) = 0",
+        "persons.manual_verified = 1",
+        "COALESCE(persons.hidden, 0) = 0",
+        "COALESCE(persons.searchable, 1) = 1",
+        "persons.deleted_at IS NULL",
+    ]
+    params: list[Any] = [person_id]
+    if date_from:
+        clauses.append("substr(COALESCE(media_items.captured_at, media_items.fallback_captured_at), 1, 10) >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("substr(COALESCE(media_items.captured_at, media_items.fallback_captured_at), 1, 10) <= ?")
+        params.append(date_to)
+    params.append(limit)
+    where_sql = " AND ".join(clauses)
+    with connect(repository.db_path) as connection:
+        initialize_schema(connection)
+        rows = connection.execute(
+            f"""
+            SELECT media_items.*,
+                   media_people.media_id,
+                   media_people.source AS person_source,
+                   media_people.confidence AS person_confidence,
+                   media_people.face_cluster_id AS person_face_cluster_id,
+                   persons.id AS related_person_id,
+                   persons.display_name AS related_person_display_name,
+                   persons.public_name AS related_person_public_name,
+                   persons.privacy_level AS related_person_privacy_level
+            FROM media_people
+            JOIN persons ON persons.id = media_people.person_id
+            JOIN media_items ON media_items.id = media_people.media_id
+            WHERE {where_sql}
+            ORDER BY COALESCE(media_items.captured_at, media_items.fallback_captured_at) ASC, media_people.media_id ASC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    results: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        data = dict(row)
+        media_id = str(data.get("media_id") or data.get("id") or "")
+        if not media_id:
+            continue
+        label = str(data.get("related_person_display_name") or data.get("related_person_public_name") or "人物候補")
+        results[media_id] = {
+            **data,
+            "media_id": media_id,
+            "person_match": 1,
+            "person_score": 1.0,
+            "person_face_score": 1.0 if data.get("person_source") == "face_cluster" else 0.7,
+            "person_event_score": 0.0,
+            "person_line_score": 0.0,
+            "related_persons": [label],
+            "person_evidence_types": [str(data.get("person_source") or "media_people"), "media_people"],
+        }
+    return results
 
 
 def format_vlm_report(report: VlmImagesReport) -> str:
@@ -331,6 +429,11 @@ def format_image_search(report: dict[str, Any]) -> str:
             lines.append(f"   OCR: {row['ocr_preview']}")
         if row.get("related_event"):
             lines.append(f"   event: {row['related_event']}")
+        if row.get("related_persons"):
+            lines.append(f"   related_persons: {', '.join(row['related_persons'])}")
+            lines.append("   person caution: 手動リンク済みperson由来の候補です。顔だけで身元や関係性を断定しません。")
+        if row.get("person_score"):
+            lines.append(f"   person_score: {row['person_score']}")
         if row.get("food_cues"):
             lines.append(f"   food_cues: {', '.join(row['food_cues'])}")
         if row.get("evidence_strength"):
@@ -362,6 +465,20 @@ def _save_result(repository, media_row: dict[str, Any], result: VlmResult) -> No
         error_message=result.error_message,
         analysis_version=ANALYSIS_VERSION,
     )
+
+
+def _fail_empty_success_caption(result: VlmResult) -> VlmResult:
+    if result.status != "success":
+        return result
+    if str(result.caption or "").strip():
+        return result
+    payload = result.to_dict()
+    payload["status"] = "failed"
+    payload["caption"] = None
+    payload["short_caption"] = None
+    payload["error_message"] = result.error_message or "VLM success result had empty caption"
+    payload["safety_flags"] = sorted(set((result.safety_flags or []) + ["empty_caption_failed"]))
+    return VlmResult(**payload)
 
 
 def recover_failed_vlm_json_rows(
@@ -471,6 +588,9 @@ def _filter_targets(repository, rows: list[dict[str, Any]], options: VlmImagesOp
     for row in rows:
         if media_id_order is not None and str(row.get("id")) not in media_id_order:
             continue
+        image_path = Path(str(row.get("file_path") or "")).expanduser()
+        if not image_path.exists():
+            continue
         if options.only_gps and (row.get("gps_lat") is None or row.get("gps_lon") is None):
             continue
         if options.only_with_ocr:
@@ -544,10 +664,23 @@ def _image_result(repository, row: dict[str, Any], query: str, *, terms: list[st
     related_event = _related_event(repository, media_id, timestamp[:10])
     if related_event:
         score += 0.1
+    person_score = float(row.get("person_score") or 0.0)
+    if person_score:
+        score += min(0.35, person_score * 0.35)
+    elif row.get("_person_query"):
+        score = min(score * 0.35, 0.24)
     if row.get("is_verified") or row.get("review_status") == "accepted":
         score += 0.08
     if row.get("is_wrong") or row.get("review_status") in {"rejected", "wrong"}:
         score -= 0.5
+    food_info = specific_food_query_info(query)
+    specific_matches = _matched_visual_terms(row, list(food_info.get("specific_terms") or [])) if food_info else []
+    generic_matches = _matched_visual_terms(row, list(food_info.get("generic_terms") or [])) if food_info else []
+    if food_info:
+        if specific_matches:
+            score += 0.25
+        else:
+            score = min(score, 0.35 if generic_matches else 0.25)
     final_score = max(0.0, min(score, 0.95))
     return {
         "date": timestamp[:10],
@@ -559,12 +692,21 @@ def _image_result(repository, row: dict[str, Any], query: str, *, terms: list[st
         "ocr_preview": ocr_preview,
         "matched_fields": fields or ["unknown"],
         "matched_terms": _matched_terms(row, terms or [query]),
+        "specific_food": food_info,
+        "specific_food_matched_terms": specific_matches,
+        "generic_food_matched_terms": generic_matches,
         "confidence": _confidence_label(final_score),
         "confidence_score": round(final_score, 3),
         "score": round(final_score, 3),
         "related_event": related_event,
         "evidence_types": _evidence_types(row),
-        "evidence_strength": _image_evidence_strength(row, related_event=related_event),
+        "evidence_strength": "weak" if food_info and not specific_matches else _image_evidence_strength(row, related_event=related_event),
+        "related_persons": list(row.get("related_persons") or []),
+        "person_evidence_types": list(row.get("person_evidence_types") or []),
+        "person_score": round(person_score, 3),
+        "person_face_score": round(float(row.get("person_face_score") or 0.0), 3),
+        "person_line_score": round(float(row.get("person_line_score") or 0.0), 3),
+        "person_event_score": round(float(row.get("person_event_score") or 0.0), 3),
         "scene_tags": _json_list(row.get("scene_tags_json")),
         "activity_tags": _json_list(row.get("activity_tags_json")),
         "food_cues": _json_list(row.get("food_cues_json")),
@@ -596,9 +738,17 @@ def _matched_fields(row: dict[str, Any], query: str, *, terms: list[str] | None 
         "food_cues": row.get("food_cues_json"),
         "text_cues": row.get("text_cues_json"),
         "ocr": row.get("ocr_text") or row.get("ocr_text_redacted"),
+        "place": " ".join(
+            str(row.get(key) or "")
+            for key in ("location_name", "place_display_name", "place_public_name", "place_category", "place_aliases_json")
+        ),
         "file_name": row.get("file_name"),
     }
-    return [name for name, value in fields.items() if any(term in str(value or "") for term in search_terms)]
+    return [
+        name
+        for name, value in fields.items()
+        if any(str(term).lower() in str(value or "").lower() for term in search_terms)
+    ]
 
 
 def _row_matches_visual_terms(row: dict[str, Any], *, raw_query: str, terms: list[str]) -> bool:
@@ -615,14 +765,19 @@ def _row_matches_visual_terms(row: dict[str, Any], *, raw_query: str, terms: lis
             "text_cues_json",
             "ocr_text",
             "ocr_text_redacted",
+            "location_name",
+            "place_display_name",
+            "place_public_name",
+            "place_category",
+            "place_aliases_json",
         )
-    )
-    if any(term and term in visual_haystack for term in terms):
+    ).lower()
+    if any(term and str(term).lower() in visual_haystack for term in terms):
         return True
     # File names are allowed only for the literal query to avoid UUID-like false
     # positives such as "CAFE" inside camera-generated names.
     literal = (raw_query or "").strip()
-    return bool(literal and literal in str(row.get("file_name") or ""))
+    return bool(literal and literal.lower() in str(row.get("file_name") or "").lower())
 
 
 def _matched_terms(row: dict[str, Any], terms: list[str]) -> list[str]:
@@ -639,14 +794,44 @@ def _matched_terms(row: dict[str, Any], terms: list[str]) -> list[str]:
             "text_cues_json",
             "ocr_text",
             "ocr_text_redacted",
+            "location_name",
+            "place_display_name",
+            "place_public_name",
+            "place_category",
+            "place_aliases_json",
+            "file_name",
+        )
+    ).lower()
+    matched: list[str] = []
+    for term in terms:
+        term = str(term or "").strip()
+        if term and term.lower() in haystack and term not in matched:
+            matched.append(term)
+    return matched[:20]
+
+
+def _matched_visual_terms(row: dict[str, Any], terms: list[str]) -> list[str]:
+    haystack = " ".join(
+        str(row.get(key) or "").lower()
+        for key in (
+            "caption",
+            "short_caption",
+            "scene_tags_json",
+            "object_tags_json",
+            "activity_tags_json",
+            "location_cues_json",
+            "food_cues_json",
+            "text_cues_json",
+            "ocr_text",
+            "ocr_text_redacted",
             "file_name",
         )
     )
     matched: list[str] = []
     for term in terms:
-        term = str(term or "").strip()
-        if term and term in haystack and term not in matched:
-            matched.append(term)
+        value = str(term or "").strip()
+        if value and value.lower() in haystack and value not in matched:
+            matched.append(value)
     return matched[:20]
 
 
@@ -668,12 +853,20 @@ def _evidence_types(row: dict[str, Any]) -> list[str]:
         types.append("ocr")
     if row.get("file_name"):
         types.append("photo")
+    if row.get("place_display_name") or row.get("place_public_name") or row.get("place_category"):
+        types.append("place")
+    if row.get("person_match"):
+        types.extend(["person", "media_people"])
     return types or ["photo"]
 
 
 def _image_evidence_strength(row: dict[str, Any], *, related_event: str | None) -> str:
     types = set(_evidence_types(row))
     if row.get("is_verified") or row.get("review_status") == "accepted":
+        return "medium"
+    if row.get("person_match") and "vlm" in types:
+        return "strong" if related_event else "medium"
+    if row.get("person_match"):
         return "medium"
     if "vlm" in types and related_event:
         return "medium"

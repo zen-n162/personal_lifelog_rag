@@ -8,6 +8,9 @@ PORTFOLIO_DOCS = [
     "docs/system_architecture.md",
     "docs/demo_scenarios.md",
     "docs/privacy_and_safety.md",
+    "docs/line_person_linking.md",
+    "docs/person_event_integration.md",
+    "docs/person_place_qa.md",
     "docs/evaluation_summary.md",
     "docs/roadmap.md",
 ]
@@ -45,4 +48,3 @@ def test_architecture_doc_contains_mermaid_flowchart() -> None:
     assert "```mermaid" in text
     assert "Qwen3-VL" in text
     assert "Qwen3-VL-Embedding" in text
-

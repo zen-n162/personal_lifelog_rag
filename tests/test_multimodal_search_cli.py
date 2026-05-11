@@ -54,6 +54,12 @@ def test_multimodal_search_cli_and_image_search_hybrid(tmp_path: Path, capsys) -
     output = capsys.readouterr().out
     assert "media_cli_mm" in output
 
+    assert main(["--db-path", str(db_path), "food-search-debug", "ラーメン", "--backend", "vlm_sql", "--limit", "5"]) == 0
+    output = capsys.readouterr().out
+    assert "Food search debug" in output
+    assert "specific_terms" in output
+    assert "media_cli_mm" in output
+
 
 def test_qa_routes_food_photo_query_to_multimodal_search(tmp_path: Path, capsys) -> None:
     db_path = tmp_path / "lifelog.sqlite"

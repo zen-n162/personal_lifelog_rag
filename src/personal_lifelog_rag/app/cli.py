@@ -55,6 +55,7 @@ from personal_lifelog_rag.embeddings.multimodal_search import (
     format_multimodal_search,
     multimodal_search,
 )
+from personal_lifelog_rag.embeddings.repository import MediaEmbeddingRepository
 from personal_lifelog_rag.embeddings.schemas import (
     BuildMediaEmbeddingsOptions,
     MultimodalSearchOptions,
@@ -75,6 +76,7 @@ from personal_lifelog_rag.evaluation.private_eval import (
 )
 from personal_lifelog_rag.evaluation.private_eval_templates import (
     format_private_eval_template_summary,
+    write_private_eval_template_from_options,
     write_private_eval_template_for_date,
 )
 from personal_lifelog_rag.evaluation.search_snapshot import (
@@ -90,6 +92,49 @@ from personal_lifelog_rag.fake_analysis_cleanup import (
     cleanup_fake_analysis,
     format_cleanup_fake_analysis,
 )
+from personal_lifelog_rag.faces.face_service import (
+    face_diagnostics,
+    face_stats,
+    format_face_detect_report,
+    format_face_diagnostics,
+    format_face_rows,
+    format_face_stats,
+    list_face_detections,
+    run_face_detection,
+    update_face_review_status,
+)
+from personal_lifelog_rag.faces.schemas import FaceDetectOptions
+from personal_lifelog_rag.faces.embedding_service import (
+    face_cluster_stats,
+    face_embedding_stats,
+    face_embedding_diagnostics,
+    format_face_cluster_report,
+    format_face_cluster_stats,
+    format_face_clusters,
+    format_face_embedding_diagnostics,
+    format_face_embedding_report,
+    format_face_embedding_stats,
+    list_face_clusters,
+    load_face_detection_runtime_config,
+    load_face_runtime_config,
+    run_face_clustering,
+    run_face_embedding,
+    update_face_cluster_status,
+)
+from personal_lifelog_rag.faces.person_service import (
+    add_person_alias,
+    anonymize_preview,
+    create_person,
+    format_anonymize_preview,
+    format_person_detail,
+    format_persons,
+    get_person,
+    link_person_face_cluster,
+    list_persons,
+    unlink_person_face_cluster,
+    update_person,
+)
+from personal_lifelog_rag.faces.schemas import FaceClusteringOptions, FaceEmbeddingOptions
 from personal_lifelog_rag.ingest.line_parser import parse_line_chat_file_with_warnings
 from personal_lifelog_rag.ingest.photo_ingest import ingest_photo_directory_with_report
 from personal_lifelog_rag.line.call_index import (
@@ -99,6 +144,27 @@ from personal_lifelog_rag.line.call_index import (
     format_call_stats,
     format_search_calls_report,
     search_calls,
+)
+from personal_lifelog_rag.line.person_links import (
+    format_line_speaker_links,
+    format_line_speaker_suggestions,
+    format_line_speakers,
+    link_line_speaker_to_person,
+    list_line_speaker_links,
+    list_line_speakers,
+    suggest_line_speaker_persons,
+    unlink_line_speaker_from_person,
+)
+from personal_lifelog_rag.people.integration import (
+    build_event_people,
+    build_media_people,
+    format_event_people,
+    format_media_people,
+    format_people_build_report,
+    format_people_stats,
+    list_event_people,
+    list_media_people,
+    people_stats,
 )
 from personal_lifelog_rag.jobs.job_repository import AnalysisJobRepository
 from personal_lifelog_rag.jobs.job_service import (
@@ -123,6 +189,12 @@ from personal_lifelog_rag.jobs.storage import (
     storage_stats,
 )
 from personal_lifelog_rag.model_diagnostics import format_model_diagnostics, run_model_diagnostics
+from personal_lifelog_rag.maintenance.missing_files import (
+    collect_missing_files,
+    export_missing_files,
+    format_missing_files,
+    mark_missing_media_unavailable,
+)
 from personal_lifelog_rag.ocr.local_ocr import get_ocr_adapter
 from personal_lifelog_rag.ocr.engines import get_ocr_engine
 from personal_lifelog_rag.ocr.config import load_ocr_runtime_config
@@ -132,6 +204,7 @@ from personal_lifelog_rag.ocr.ocr_service import (
     format_ocr_report,
     format_ocr_show,
     format_ocr_stats,
+    ocr_priority_candidates,
     ocr_stats,
     run_ocr_images,
 )
@@ -145,6 +218,26 @@ from personal_lifelog_rag.places.clusterer import (
     write_place_cluster_suggestions,
 )
 from personal_lifelog_rag.places.geo import privacy_safe_lat_lon
+from personal_lifelog_rag.places.location_store import (
+    add_place_alias,
+    assign_db_places,
+    build_location_points_from_media,
+    cluster_location_points,
+    create_place,
+    format_cluster_build_report,
+    format_cluster_detail,
+    format_cluster_list,
+    format_db_place_assignment_report,
+    format_location_point_build_report,
+    format_place_row,
+    get_place_cluster_detail,
+    link_place_cluster,
+    list_place_clusters,
+    unlink_place_cluster,
+    update_place,
+    update_place_cluster_status,
+    set_place_privacy,
+)
 from personal_lifelog_rag.places.matcher import match_place
 from personal_lifelog_rag.places.place_dictionary import (
     DEFAULT_PRIVATE_PLACES_PATH,
@@ -157,6 +250,16 @@ from personal_lifelog_rag.places.redaction import (
     place_display_preview,
 )
 from personal_lifelog_rag.places.stats import format_place_stats, place_stats
+from personal_lifelog_rag.privacy_controls import (
+    face_delete_data,
+    format_privacy_audit,
+    format_privacy_operation,
+    hide_place,
+    person_delete,
+    person_detach,
+    person_export,
+    privacy_audit,
+)
 from personal_lifelog_rag.retrieval.answer_builder import build_answer
 from personal_lifelog_rag.retrieval.date_parser import parse_date_query
 from personal_lifelog_rag.retrieval.date_inspector import format_date_inspection, inspect_date
@@ -171,7 +274,17 @@ from personal_lifelog_rag.retrieval.query_router import (
     format_routed_query_result,
     route_query,
 )
+from personal_lifelog_rag.retrieval.visual_query_expansion import expand_visual_query_terms, specific_food_query_info
 from personal_lifelog_rag.reporting.report_builder import DEFAULT_REPORTS_DIR, build_report, write_report
+from personal_lifelog_rag.reporting.portfolio_html import (
+    PortfolioHtmlOptions,
+    build_portfolio_html,
+)
+from personal_lifelog_rag.reporting.release_snapshot import (
+    DEFAULT_RELEASE_MANIFEST,
+    build_release_manifest,
+    format_release_manifest,
+)
 from personal_lifelog_rag.reporting.schemas import ReportOptions
 from personal_lifelog_rag.rollout.monthly_rollout import (
     DEFAULT_CONFIG_PATH as DEFAULT_MONTH_ROLLOUT_CONFIG_PATH,
@@ -485,6 +598,29 @@ def build_parser() -> argparse.ArgumentParser:
     examples_group.add_argument("--no-examples", action="store_true", dest="no_examples")
     generate_report_parser.add_argument("--save-json", action="store_true")
 
+    portfolio_html_parser = subparsers.add_parser(
+        "build-portfolio-html",
+        help="Build a public single-file HTML portfolio from local Markdown docs and reports.",
+    )
+    portfolio_html_parser.add_argument("--output", type=Path, default=Path("reports/portfolio_public.html"))
+    portfolio_html_parser.add_argument("--mode", choices=["public"], default="public")
+    portfolio_html_parser.add_argument("--source-report", type=Path, default=None)
+    portfolio_html_parser.add_argument("--check-privacy", action="store_true")
+    portfolio_html_parser.add_argument("--open", action="store_true", dest="open_browser")
+    portfolio_html_parser.add_argument("--force", action="store_true")
+
+    release_check_parser = subparsers.add_parser(
+        "release-check",
+        parents=[db_parent],
+        help="Create a public-safe release freeze manifest.",
+    )
+    release_check_parser.add_argument("--version", default="v0.1")
+    release_check_parser.add_argument("--save-manifest", action="store_true")
+    release_check_parser.add_argument("--output", type=Path, default=DEFAULT_RELEASE_MANIFEST)
+    release_check_parser.add_argument("--eval-path", type=Path, default=Path("private_eval/questions_20241224.yaml"))
+    release_check_parser.add_argument("--run-pytest", action="store_true")
+    release_check_parser.add_argument("--json", action="store_true", dest="as_json")
+
     ingest_line_parser = subparsers.add_parser(
         "ingest-line",
         parents=[db_parent],
@@ -526,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     qa_parser.add_argument("query")
     qa_parser.add_argument("--limit", type=int, default=5)
     qa_parser.add_argument("--include-hidden", action="store_true")
+    qa_parser.add_argument("--public", action="store_true", dest="public_mode", help="Use public-safe person/place labels.")
     qa_parser.add_argument("--json", action="store_true", dest="as_json")
 
     batch_qa_parser = subparsers.add_parser(
@@ -533,13 +670,20 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[db_parent],
         help="Run multiple natural-language QA queries in one local process.",
     )
-    batch_qa_parser.add_argument("--query", action="append", required=True, help="Question to run. Repeat for multiple queries.")
+    batch_qa_parser.add_argument("--query", action="append", default=[], help="Question to run. Repeat for multiple queries.")
+    batch_qa_parser.add_argument("--queries-file", type=Path, default=None, help="Text file with one question per line.")
     batch_qa_parser.add_argument("--limit", type=int, default=5)
     batch_qa_parser.add_argument("--include-hidden", action="store_true")
     batch_qa_parser.add_argument("--config", type=Path, default=None, help="Optional private model runtime config.")
     batch_qa_parser.add_argument("--output-json", type=Path, default=None)
     batch_qa_parser.add_argument("--output-md", type=Path, default=None)
     batch_qa_parser.add_argument("--save-run", action="store_true")
+    error_group = batch_qa_parser.add_mutually_exclusive_group()
+    error_group.add_argument("--continue-on-error", action="store_true", dest="continue_on_error", default=True)
+    error_group.add_argument("--fail-fast", action="store_false", dest="continue_on_error")
+    answer_group = batch_qa_parser.add_mutually_exclusive_group()
+    answer_group.add_argument("--include-full-answer", action="store_true")
+    answer_group.add_argument("--summary-only", action="store_true")
 
     ui_parser = subparsers.add_parser(
         "ui",
@@ -664,6 +808,8 @@ def build_parser() -> argparse.ArgumentParser:
     retry_vlm_failed_parser.add_argument("--config", type=Path, default=None)
     retry_vlm_failed_parser.add_argument("--prompt-template", default=None)
     retry_vlm_failed_parser.add_argument("--dry-run", action="store_true")
+    retry_vlm_failed_parser.add_argument("--force", action="store_true")
+    retry_vlm_failed_parser.add_argument("--save-report", action="store_true")
     retry_vlm_failed_parser.add_argument("--rerun-model", action="store_true")
     retry_vlm_failed_parser.add_argument("--allow-fake-write", action="store_true")
 
@@ -836,6 +982,19 @@ def build_parser() -> argparse.ArgumentParser:
     multimodal_search_parser.add_argument("--include-hidden", action="store_true")
     multimodal_search_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    food_search_debug_parser = subparsers.add_parser(
+        "food-search-debug",
+        parents=[db_parent],
+        help="Explain dish-specific local image search expansion and ranking.",
+    )
+    food_search_debug_parser.add_argument("query")
+    food_search_debug_parser.add_argument("--from", dest="from_date", default=None)
+    food_search_debug_parser.add_argument("--to", dest="to_date", default=None)
+    food_search_debug_parser.add_argument("--limit", type=int, default=10)
+    food_search_debug_parser.add_argument("--backend", choices=["sql", "vlm_sql", "embedding", "hybrid"], default="hybrid")
+    food_search_debug_parser.add_argument("--config", type=Path, default=None)
+    food_search_debug_parser.add_argument("--json", action="store_true", dest="as_json")
+
     vlm_prompt_parser = subparsers.add_parser(
         "vlm-prompt",
         help="Print a local VLM prompt template for dry-run review.",
@@ -943,6 +1102,69 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_images_parser.add_argument("--dry-run", action="store_true")
     ocr_images_parser.add_argument("--force", action="store_true")
     ocr_images_parser.add_argument("--skip-existing", action="store_true")
+    ocr_images_parser.add_argument("--text-cues-only", action="store_true")
+    ocr_images_parser.add_argument("--vlm-text-hint-only", action="store_true")
+    ocr_images_parser.add_argument("--has-vlm-text", action="store_true")
+    ocr_images_parser.add_argument("--ocr-priority", action="store_true")
+    ocr_images_parser.add_argument("--contains-text-hint", action="store_true")
+    ocr_images_parser.add_argument("--caption-keywords", default=None)
+    ocr_images_parser.add_argument("--min-vlm-confidence", type=float, default=None)
+    ocr_images_parser.add_argument("--only-existing-files", action="store_true", default=True)
+
+    retry_ocr_failed_parser = subparsers.add_parser(
+        "retry-ocr-failed",
+        parents=[db_parent],
+        help="Retry local OCR rows whose previous status is failed or engine_unavailable.",
+    )
+    retry_ocr_failed_parser.add_argument("--date", default=None)
+    retry_ocr_failed_parser.add_argument("--from", dest="from_date", default=None)
+    retry_ocr_failed_parser.add_argument("--to", dest="to_date", default=None)
+    retry_ocr_failed_parser.add_argument("--limit", type=int, default=50)
+    retry_ocr_failed_parser.add_argument("--engine", default=None)
+    retry_ocr_failed_parser.add_argument("--config", type=Path, default=None)
+    retry_ocr_failed_parser.add_argument("--languages", default=None)
+    retry_ocr_failed_parser.add_argument("--dry-run", action="store_true")
+    retry_ocr_failed_parser.add_argument("--save-report", action="store_true")
+
+    retry_embedding_failed_parser = subparsers.add_parser(
+        "retry-embedding-failed",
+        parents=[db_parent],
+        help="Retry media_embeddings rows whose previous status is failed or engine_unavailable.",
+    )
+    retry_embedding_failed_parser.add_argument("--date", default=None)
+    retry_embedding_failed_parser.add_argument("--from", dest="from_date", default=None)
+    retry_embedding_failed_parser.add_argument("--to", dest="to_date", default=None)
+    retry_embedding_failed_parser.add_argument("--limit", type=int, default=50)
+    retry_embedding_failed_parser.add_argument("--type", choices=["image", "caption", "ocr", "combined_text", "all"], default="all")
+    retry_embedding_failed_parser.add_argument("--engine", default=None)
+    retry_embedding_failed_parser.add_argument("--model", default=None)
+    retry_embedding_failed_parser.add_argument("--model-path", default=None)
+    retry_embedding_failed_parser.add_argument("--config", type=Path, default=None)
+    retry_embedding_failed_parser.add_argument("--dry-run", action="store_true")
+    retry_embedding_failed_parser.add_argument("--force", action="store_true")
+
+    ocr_priority_parser = subparsers.add_parser(
+        "ocr-priority",
+        parents=[db_parent],
+        help="List images that look most promising for OCR based on VLM text cues.",
+    )
+    ocr_priority_parser.add_argument("--from", dest="from_date", default=None)
+    ocr_priority_parser.add_argument("--to", dest="to_date", default=None)
+    ocr_priority_parser.add_argument("--limit", type=int, default=50)
+    ocr_priority_parser.add_argument("--caption-keywords", default=None)
+    ocr_priority_parser.add_argument("--min-vlm-confidence", type=float, default=None)
+    ocr_priority_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    missing_files_parser = subparsers.add_parser(
+        "missing-files",
+        parents=[db_parent],
+        help="List imported media whose original local files or thumbnails are missing.",
+    )
+    missing_files_parser.add_argument("--limit", type=int, default=50)
+    missing_files_parser.add_argument("--export", type=Path, default=None)
+    missing_files_parser.add_argument("--mark-unavailable", action="store_true")
+    missing_files_parser.add_argument("--yes", action="store_true")
+    missing_files_parser.add_argument("--json", action="store_true", dest="as_json")
 
     ocr_stats_parser = subparsers.add_parser(
         "ocr-stats",
@@ -975,6 +1197,383 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_search_parser.add_argument("--limit", type=int, default=20)
     ocr_search_parser.add_argument("--include-non-success", action="store_true")
     ocr_search_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_diag_parser = subparsers.add_parser(
+        "face-diagnostics",
+        help="Inspect local-only face detector availability without identity inference.",
+    )
+    face_diag_parser.add_argument("--config", type=Path, default=None)
+    face_diag_parser.add_argument("--model-path", default=None)
+    face_diag_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_detect_parser = subparsers.add_parser(
+        "face-detect",
+        parents=[db_parent],
+        help="Run local face detection and store private bbox/crop metadata.",
+    )
+    face_detect_parser.add_argument("--date", default=None)
+    face_detect_parser.add_argument("--from", dest="from_date", default=None)
+    face_detect_parser.add_argument("--to", dest="to_date", default=None)
+    face_detect_parser.add_argument("--limit", type=int, default=100)
+    face_detect_parser.add_argument("--engine", default=None)
+    face_detect_parser.add_argument("--config", type=Path, default=None)
+    face_detect_parser.add_argument("--model-path", default=None)
+    face_detect_parser.add_argument("--score-threshold", type=float, default=None)
+    face_detect_parser.add_argument("--nms-threshold", type=float, default=None)
+    face_detect_parser.add_argument("--top-k", type=int, default=None)
+    face_detect_parser.add_argument("--max-input-size", type=int, default=None)
+    face_detect_parser.add_argument("--dry-run", action="store_true")
+    face_detect_parser.add_argument("--skip-existing", action="store_true")
+    face_detect_parser.add_argument("--force", action="store_true")
+    face_detect_parser.add_argument("--min-score", type=float, default=None)
+    face_detect_parser.add_argument("--save-crops", action="store_true", default=False)
+    face_detect_parser.add_argument("--no-save-crops", action="store_false", dest="save_crops")
+    face_detect_parser.add_argument("--only-existing-files", action="store_true", default=True)
+    face_detect_parser.add_argument("--include-hidden", action="store_true")
+    face_detect_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_stats_parser = subparsers.add_parser(
+        "face-stats",
+        parents=[db_parent],
+        help="Show private face detection coverage and review status counts.",
+    )
+    face_stats_parser.add_argument("--from", dest="from_date", default=None)
+    face_stats_parser.add_argument("--to", dest="to_date", default=None)
+    face_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_show_parser = subparsers.add_parser(
+        "face-show",
+        parents=[db_parent],
+        help="Show compact private face detection rows.",
+    )
+    face_show_parser.add_argument("--date", default=None)
+    face_show_parser.add_argument("--from", dest="from_date", default=None)
+    face_show_parser.add_argument("--to", dest="to_date", default=None)
+    face_show_parser.add_argument("--status", default=None)
+    face_show_parser.add_argument("--review-status", default=None)
+    face_show_parser.add_argument("--limit", type=int, default=20)
+    face_show_parser.add_argument("--show-errors", action="store_true")
+    face_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_review_queue_parser = subparsers.add_parser(
+        "face-review-queue",
+        parents=[db_parent],
+        help="List unreviewed private face detections for manual review.",
+    )
+    face_review_queue_parser.add_argument("--date", default=None)
+    face_review_queue_parser.add_argument("--from", dest="from_date", default=None)
+    face_review_queue_parser.add_argument("--to", dest="to_date", default=None)
+    face_review_queue_parser.add_argument("--min-score", type=float, default=None)
+    face_review_queue_parser.add_argument("--has-crop", action="store_true")
+    face_review_queue_parser.add_argument("--limit", type=int, default=50)
+    face_review_queue_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    update_face_parser = subparsers.add_parser(
+        "update-face-detection",
+        parents=[db_parent],
+        help="Update manual review status for a detected face bbox.",
+    )
+    update_face_parser.add_argument("--face-id", required=True)
+    update_face_parser.add_argument(
+        "--review-status",
+        required=True,
+        choices=["unreviewed", "accepted", "rejected", "bad_detection"],
+    )
+    update_face_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_embedding_diag_parser = subparsers.add_parser(
+        "face-embedding-diagnostics",
+        help="Inspect local face embedding engine availability without network access.",
+    )
+    face_embedding_diag_parser.add_argument("--config", type=Path, default=None)
+    face_embedding_diag_parser.add_argument("--engine", default=None)
+    face_embedding_diag_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_embed_parser = subparsers.add_parser(
+        "face-embed",
+        parents=[db_parent],
+        help="Build private face embeddings from detected face crops/bboxes.",
+    )
+    face_embed_parser.add_argument("--date", default=None)
+    face_embed_parser.add_argument("--from", dest="from_date", default=None)
+    face_embed_parser.add_argument("--to", dest="to_date", default=None)
+    face_embed_parser.add_argument("--limit", type=int, default=0, help="Maximum detections to process. 0 means all matching rows.")
+    face_embed_parser.add_argument("--engine", default=None)
+    face_embed_parser.add_argument("--detections-engine", default=None)
+    face_embed_parser.add_argument("--status", default="success")
+    face_embed_parser.add_argument("--config", type=Path, default=None)
+    face_embed_parser.add_argument("--dry-run", action="store_true")
+    face_embed_parser.add_argument("--skip-existing", action="store_true")
+    face_embed_parser.add_argument("--force", action="store_true")
+    face_embed_parser.add_argument("--replace", action="store_true")
+    face_embed_parser.add_argument("--batch-size", type=int, default=500)
+    face_embed_parser.add_argument("--only-with-crop", action="store_true")
+    face_embed_parser.add_argument("--only-existing-files", action="store_true")
+    face_embed_parser.add_argument("--save-report", action="store_true")
+    face_embed_parser.add_argument("--only-reviewed-detections", action="store_true")
+    face_embed_parser.add_argument("--include-unreviewed-detections", action="store_true", default=True)
+    face_embed_parser.add_argument("--min-detection-score", type=float, default=None)
+    face_embed_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_embedding_stats_parser = subparsers.add_parser(
+        "face-embedding-stats",
+        parents=[db_parent],
+        help="Show face detection to embedding coverage for a date range.",
+    )
+    face_embedding_stats_parser.add_argument("--from", dest="from_date", default=None)
+    face_embedding_stats_parser.add_argument("--to", dest="to_date", default=None)
+    face_embedding_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_cluster_parser = subparsers.add_parser(
+        "face-cluster",
+        parents=[db_parent],
+        help="Cluster successful private face embeddings into unreviewed person candidates.",
+    )
+    face_cluster_parser.add_argument("--date", default=None)
+    face_cluster_parser.add_argument("--from", dest="from_date", default=None)
+    face_cluster_parser.add_argument("--to", dest="to_date", default=None)
+    face_cluster_parser.add_argument("--method", default=None)
+    face_cluster_parser.add_argument("--config", type=Path, default=None)
+    face_cluster_parser.add_argument("--distance-threshold", type=float, default=None)
+    face_cluster_parser.add_argument("--min-samples", type=int, default=None)
+    face_cluster_parser.add_argument("--dry-run", action="store_true")
+    face_cluster_parser.add_argument("--yes", action="store_true")
+    face_cluster_parser.add_argument("--replace", action="store_true")
+    face_cluster_parser.add_argument("--scope", default=None)
+    face_cluster_parser.add_argument("--embedding-model", default=None)
+    face_cluster_parser.add_argument("--save-report", action="store_true")
+    face_cluster_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_cluster_stats_parser = subparsers.add_parser(
+        "face-cluster-stats",
+        parents=[db_parent],
+        help="Show private face embedding and clustering diagnostics.",
+    )
+    face_cluster_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_cluster_show_parser = subparsers.add_parser(
+        "face-cluster-show",
+        parents=[db_parent],
+        help="Show private face cluster candidates and member face IDs.",
+    )
+    face_cluster_show_parser.add_argument("--cluster-id", default=None)
+    face_cluster_show_parser.add_argument("--status", default=None)
+    face_cluster_show_parser.add_argument("--limit", type=int, default=20)
+    face_cluster_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    update_face_cluster_parser = subparsers.add_parser(
+        "update-face-cluster",
+        parents=[db_parent],
+        help="Update manual review status for a face cluster candidate.",
+    )
+    update_face_cluster_parser.add_argument("--cluster-id", required=True)
+    update_face_cluster_parser.add_argument(
+        "--status",
+        required=True,
+        choices=["unreviewed", "accepted", "rejected", "merged", "split", "bad_cluster"],
+    )
+    update_face_cluster_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_parser = subparsers.add_parser(
+        "persons",
+        parents=[db_parent],
+        help="Manage manually entered person labels for reviewed face clusters.",
+    )
+    persons_subparsers = persons_parser.add_subparsers(dest="persons_command", required=True)
+    persons_list_parser = persons_subparsers.add_parser("list", help="List manual person labels.")
+    persons_list_parser.add_argument("--limit", type=int, default=100)
+    persons_list_parser.add_argument("--public", action="store_true", dest="public_mode")
+    persons_list_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_create_parser = persons_subparsers.add_parser("create", help="Create a manual person label.")
+    persons_create_parser.add_argument("--name", required=True)
+    persons_create_parser.add_argument("--public-name", default=None)
+    persons_create_parser.add_argument(
+        "--privacy-level",
+        default="private",
+        choices=["private", "public_alias", "public_hidden"],
+    )
+    persons_create_parser.add_argument("--notes", default=None)
+    persons_create_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_show_parser = persons_subparsers.add_parser("show", help="Show one manual person label.")
+    persons_show_parser.add_argument("--person-id", required=True)
+    persons_show_parser.add_argument("--public", action="store_true", dest="public_mode")
+    persons_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_update_parser = persons_subparsers.add_parser("update", help="Update a manual person label.")
+    persons_update_parser.add_argument("--person-id", required=True)
+    persons_update_parser.add_argument("--name", default=None)
+    persons_update_parser.add_argument("--public-name", default=None)
+    persons_update_parser.add_argument("--privacy-level", choices=["private", "public_alias", "public_hidden"], default=None)
+    persons_update_parser.add_argument("--notes", default=None)
+    persons_update_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_alias_parser = persons_subparsers.add_parser("add-alias", help="Add a manual alias to a person.")
+    persons_alias_parser.add_argument("--person-id", required=True)
+    persons_alias_parser.add_argument("--alias", required=True)
+    persons_alias_parser.add_argument("--source", choices=["manual", "line_speaker", "nickname"], default="manual")
+    persons_alias_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_link_parser = persons_subparsers.add_parser("link-face-cluster", help="Manually link a person to a face cluster.")
+    persons_link_parser.add_argument("--person-id", required=True)
+    persons_link_parser.add_argument("--cluster-id", required=True)
+    persons_link_parser.add_argument("--yes", action="store_true")
+    persons_link_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_unlink_parser = persons_subparsers.add_parser("unlink-face-cluster", help="Remove a manual person to face cluster link.")
+    persons_unlink_parser.add_argument("--person-id", required=True)
+    persons_unlink_parser.add_argument("--cluster-id", required=True)
+    persons_unlink_parser.add_argument("--yes", action="store_true")
+    persons_unlink_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    persons_preview_parser = persons_subparsers.add_parser("anonymize-preview", help="Preview public anonymization for manual person labels.")
+    persons_preview_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    line_speakers_parser = subparsers.add_parser(
+        "line-speakers",
+        parents=[db_parent],
+        help="List and manually link LINE speakers to person labels.",
+    )
+    line_speakers_subparsers = line_speakers_parser.add_subparsers(dest="line_speakers_command", required=True)
+    line_speakers_list_parser = line_speakers_subparsers.add_parser("list", help="List LINE sender names by chat.")
+    line_speakers_list_parser.add_argument("--limit", type=int, default=100)
+    line_speakers_list_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    line_speakers_link_parser = line_speakers_subparsers.add_parser("link-person", help="Manually link a LINE speaker to a person.")
+    line_speakers_link_parser.add_argument("--chat-id", required=True)
+    line_speakers_link_parser.add_argument("--speaker-name", required=True)
+    line_speakers_link_parser.add_argument("--person-id", required=True)
+    line_speakers_link_parser.add_argument("--add-alias", action="store_true")
+    line_speakers_link_parser.add_argument("--yes", action="store_true")
+    line_speakers_link_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    line_speakers_unlink_parser = line_speakers_subparsers.add_parser("unlink-person", help="Remove a manual LINE speaker link.")
+    line_speakers_unlink_parser.add_argument("--chat-id", required=True)
+    line_speakers_unlink_parser.add_argument("--speaker-name", required=True)
+    line_speakers_unlink_parser.add_argument("--person-id", required=True)
+    line_speakers_unlink_parser.add_argument("--yes", action="store_true")
+    line_speakers_unlink_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    line_speakers_show_parser = line_speakers_subparsers.add_parser("show-links", help="Show manual LINE speaker links.")
+    line_speakers_show_parser.add_argument("--limit", type=int, default=200)
+    line_speakers_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    line_speakers_suggest_parser = line_speakers_subparsers.add_parser("suggest", help="Show non-binding person candidates for a LINE speaker.")
+    line_speakers_suggest_parser.add_argument("--speaker-name", required=True)
+    line_speakers_suggest_parser.add_argument("--limit", type=int, default=10)
+    line_speakers_suggest_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    build_media_people_parser = subparsers.add_parser(
+        "build-media-people",
+        parents=[db_parent],
+        help="Build media_people from manually verified person-face-cluster links.",
+    )
+    build_media_people_parser.add_argument("--from", dest="from_date", default=None)
+    build_media_people_parser.add_argument("--to", dest="to_date", default=None)
+    build_media_people_parser.add_argument("--dry-run", action="store_true")
+    build_media_people_parser.add_argument("--yes", action="store_true")
+    build_media_people_parser.add_argument("--replace", action="store_true")
+    build_media_people_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    build_event_people_parser = subparsers.add_parser(
+        "build-event-people",
+        parents=[db_parent],
+        help="Build event_people from media_people and manually linked LINE speakers.",
+    )
+    build_event_people_parser.add_argument("--from", dest="from_date", default=None)
+    build_event_people_parser.add_argument("--to", dest="to_date", default=None)
+    build_event_people_parser.add_argument("--dry-run", action="store_true")
+    build_event_people_parser.add_argument("--yes", action="store_true")
+    build_event_people_parser.add_argument("--replace", action="store_true")
+    build_event_people_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    people_stats_parser = subparsers.add_parser(
+        "people-stats",
+        parents=[db_parent],
+        help="Show private person/media/event link statistics.",
+    )
+    people_stats_parser.add_argument("--from", dest="from_date", default=None)
+    people_stats_parser.add_argument("--to", dest="to_date", default=None)
+    people_stats_parser.add_argument("--public", action="store_true", dest="public_mode")
+    people_stats_parser.add_argument("--limit", type=int, default=10)
+    people_stats_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    event_people_show_parser = subparsers.add_parser(
+        "event-people-show",
+        parents=[db_parent],
+        help="Show manually verified people attached to events.",
+    )
+    event_people_show_parser.add_argument("--date", default=None)
+    event_people_show_parser.add_argument("--event-id", default=None)
+    event_people_show_parser.add_argument("--public", action="store_true", dest="public_mode")
+    event_people_show_parser.add_argument("--limit", type=int, default=50)
+    event_people_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    media_people_show_parser = subparsers.add_parser(
+        "media-people-show",
+        parents=[db_parent],
+        help="Show manually verified people attached to media.",
+    )
+    media_people_show_parser.add_argument("--date", default=None)
+    media_people_show_parser.add_argument("--public", action="store_true", dest="public_mode")
+    media_people_show_parser.add_argument("--limit", type=int, default=50)
+    media_people_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    privacy_audit_parser = subparsers.add_parser(
+        "privacy-audit",
+        parents=[db_parent],
+        help="Audit local/public artifacts for private person, face, location, and path leaks.",
+    )
+    privacy_audit_parser.add_argument("--public", action="store_true", dest="public_mode")
+    privacy_audit_parser.add_argument("--path", action="append", default=None, help="Optional public artifact path to audit.")
+    privacy_audit_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    person_export_parser = subparsers.add_parser(
+        "person-export",
+        parents=[db_parent],
+        help="Export one person with private or public-redacted controls.",
+    )
+    person_export_parser.add_argument("--person-id", required=True)
+    person_export_parser.add_argument("--output", type=Path, default=None)
+    person_export_parser.add_argument("--mode", choices=["private", "public_redacted"], default="public_redacted")
+    person_export_parser.add_argument("--dry-run", action="store_true")
+    person_export_parser.add_argument("--yes", action="store_true")
+    person_export_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    person_detach_parser = subparsers.add_parser(
+        "person-detach",
+        parents=[db_parent],
+        help="Detach a person from face, LINE, media, and event links without deleting the person row.",
+    )
+    person_detach_parser.add_argument("--person-id", required=True)
+    person_detach_parser.add_argument("--dry-run", action="store_true")
+    person_detach_parser.add_argument("--yes", action="store_true")
+    person_detach_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    person_delete_parser = subparsers.add_parser(
+        "person-delete",
+        parents=[db_parent],
+        help="Soft-delete a person from search/QA/report usage.",
+    )
+    person_delete_parser.add_argument("--person-id", required=True)
+    person_delete_parser.add_argument("--soft", action="store_true", default=True)
+    person_delete_parser.add_argument("--hard-delete", action="store_true")
+    person_delete_parser.add_argument("--dry-run", action="store_true")
+    person_delete_parser.add_argument("--yes", action="store_true")
+    person_delete_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    face_delete_data_parser = subparsers.add_parser(
+        "face-delete-data",
+        parents=[db_parent],
+        help="Delete local face crops and/or face embeddings for one face detection.",
+    )
+    face_delete_data_parser.add_argument("--face-id", required=True)
+    face_delete_data_parser.add_argument("--delete-crop", action="store_true")
+    face_delete_data_parser.add_argument("--delete-embedding", action="store_true")
+    face_delete_data_parser.add_argument("--dry-run", action="store_true")
+    face_delete_data_parser.add_argument("--yes", action="store_true")
+    face_delete_data_parser.add_argument("--json", action="store_true", dest="as_json")
 
     build_events_parser = subparsers.add_parser(
         "build-events",
@@ -1139,6 +1738,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     db_check_parser.add_argument("--json", action="store_true", dest="as_json")
     db_check_parser.add_argument("--strict", action="store_true")
+    db_check_parser.add_argument(
+        "--fail-on-missing-files",
+        action="store_true",
+        help="Treat missing original media files as strict failures instead of warnings.",
+    )
 
     private_eval_parser = subparsers.add_parser(
         "private-eval",
@@ -1161,8 +1765,11 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[db_parent],
         help="Generate a local private eval YAML template from aggregate DB state for one baseline date.",
     )
-    make_private_eval_template_parser.add_argument("--date", required=True)
+    make_private_eval_template_parser.add_argument("--date", default=None)
     make_private_eval_template_parser.add_argument("--output", type=Path, required=True)
+    make_private_eval_template_parser.add_argument("--include-people", action="store_true")
+    make_private_eval_template_parser.add_argument("--include-places", action="store_true")
+    make_private_eval_template_parser.add_argument("--include-privacy", action="store_true")
     make_private_eval_template_parser.add_argument("--json", action="store_true", dest="as_json")
 
     eval_compare_parser = subparsers.add_parser(
@@ -1176,6 +1783,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     places_parser = subparsers.add_parser(
         "places",
+        parents=[db_parent],
         help="Validate, list, or match local private place dictionaries.",
     )
     places_subparsers = places_parser.add_subparsers(dest="places_command", required=True)
@@ -1199,6 +1807,84 @@ def build_parser() -> argparse.ArgumentParser:
     )
     places_redact_preview_parser.add_argument("--path", type=Path, default=DEFAULT_PRIVATE_PLACES_PATH)
 
+    places_list_clusters_parser = places_subparsers.add_parser("list-clusters", help="List DB place clusters without exact coordinates.")
+    places_list_clusters_parser.add_argument("--limit", type=int, default=20)
+    places_list_clusters_parser.add_argument("--status", default=None, choices=["unreviewed", "accepted", "rejected", "merged", "all"])
+    places_list_clusters_parser.add_argument(
+        "--privacy-level",
+        default=None,
+        choices=["private", "public_label", "public_hidden", "exact_private", "approximate_private", "public_place_label", "all"],
+    )
+    places_list_clusters_parser.add_argument("--category", default=None, choices=["home", "school", "lab", "station", "cafe", "restaurant", "travel", "shop", "event_venue", "other", "all"])
+    places_list_clusters_parser.add_argument("--search", default=None)
+    places_list_clusters_parser.add_argument("--from", dest="from_date", default=None)
+    places_list_clusters_parser.add_argument("--to", dest="to_date", default=None)
+    places_list_clusters_parser.add_argument("--min-points", type=int, default=None)
+    places_show_cluster_parser = places_subparsers.add_parser("show-cluster", help="Show one DB place cluster without exact coordinates.")
+    places_show_cluster_parser.add_argument("--cluster-id", required=True)
+    places_show_cluster_parser.add_argument("--show-exact", action="store_true")
+    places_create_parser = places_subparsers.add_parser("create", help="Create or update one DB place label.")
+    places_create_parser.add_argument("--id", dest="place_id", default=None)
+    places_create_parser.add_argument("--name", required=True)
+    places_create_parser.add_argument("--public-name", default=None)
+    places_create_parser.add_argument(
+        "--category",
+        default="other",
+        choices=["home", "school", "lab", "station", "cafe", "restaurant", "travel", "shop", "event_venue", "other"],
+    )
+    places_create_parser.add_argument("--cluster-id", default=None)
+    places_create_parser.add_argument("--alias", action="append", default=[])
+    places_create_parser.add_argument("--privacy-level", default="private", choices=["private", "public_label", "public_hidden"])
+    places_create_parser.add_argument("--manual-verified", action="store_true")
+    places_create_parser.add_argument("--notes", default=None)
+    places_link_cluster_parser = places_subparsers.add_parser("link-cluster", help="Link an existing place to a DB place cluster.")
+    places_link_cluster_parser.add_argument("--place-id", required=True)
+    places_link_cluster_parser.add_argument("--cluster-id", required=True)
+    places_link_cluster_parser.add_argument("--yes", action="store_true")
+    places_update_parser = places_subparsers.add_parser("update", help="Update one DB place label.")
+    places_update_parser.add_argument("--place-id", required=True)
+    places_update_parser.add_argument("--name", default=None)
+    places_update_parser.add_argument("--public-name", default=None)
+    places_update_parser.add_argument(
+        "--category",
+        default=None,
+        choices=["home", "school", "lab", "station", "cafe", "restaurant", "travel", "shop", "event_venue", "other"],
+    )
+    places_update_parser.add_argument("--privacy-level", default=None, choices=["private", "public_label", "public_hidden"])
+    places_update_parser.add_argument("--manual-verified", action="store_true", default=None)
+    places_update_parser.add_argument("--notes", default=None)
+    places_add_alias_parser = places_subparsers.add_parser("add-alias", help="Add an alias to a DB place.")
+    places_add_alias_parser.add_argument("--place-id", required=True)
+    places_add_alias_parser.add_argument("--alias", required=True)
+    places_set_privacy_parser = places_subparsers.add_parser("set-privacy", help="Set DB place privacy level.")
+    places_set_privacy_parser.add_argument("--place-id", required=True)
+    places_set_privacy_parser.add_argument("--privacy-level", required=True, choices=["private", "public_label", "public_hidden"])
+    places_hide_parser = places_subparsers.add_parser("hide", help="Hide a DB place from public/search outputs.")
+    places_hide_parser.add_argument("--place-id", required=True)
+    places_hide_parser.add_argument("--dry-run", action="store_true")
+    places_hide_parser.add_argument("--yes", action="store_true")
+    places_hide_parser.add_argument("--json", action="store_true", dest="as_json")
+    places_reject_cluster_parser = places_subparsers.add_parser("reject-cluster", help="Reject a DB place cluster.")
+    places_reject_cluster_parser.add_argument("--cluster-id", required=True)
+    places_reject_cluster_parser.add_argument("--yes", action="store_true")
+    places_accept_cluster_parser = places_subparsers.add_parser("accept-cluster", help="Accept a DB place cluster.")
+    places_accept_cluster_parser.add_argument("--cluster-id", required=True)
+    places_accept_cluster_parser.add_argument("--yes", action="store_true")
+    places_unlink_cluster_parser = places_subparsers.add_parser("unlink-cluster", help="Unlink any place from a DB place cluster.")
+    places_unlink_cluster_parser.add_argument("--cluster-id", required=True)
+    places_unlink_cluster_parser.add_argument("--yes", action="store_true")
+
+    build_location_points_parser = subparsers.add_parser(
+        "build-location-points",
+        parents=[db_parent],
+        help="Build private DB location_points from GPS-tagged media_items.",
+    )
+    build_location_points_parser.add_argument("--from", dest="from_date", default=None)
+    build_location_points_parser.add_argument("--to", dest="to_date", default=None)
+    build_location_points_parser.add_argument("--dry-run", action="store_true")
+    build_location_points_parser.add_argument("--yes", action="store_true")
+    build_location_points_parser.add_argument("--json", action="store_true", dest="as_json")
+
     cluster_places_parser = subparsers.add_parser(
         "cluster-places",
         parents=[db_parent],
@@ -1209,6 +1895,11 @@ def build_parser() -> argparse.ArgumentParser:
     cluster_places_parser.add_argument("--all", action="store_true")
     cluster_places_parser.add_argument("--radius-m", type=float, default=500.0)
     cluster_places_parser.add_argument("--min-points", type=int, default=5)
+    cluster_places_parser.add_argument("--eps-meters", type=float, default=None)
+    cluster_places_parser.add_argument("--min-samples", type=int, default=None)
+    cluster_places_parser.add_argument("--dry-run", action="store_true")
+    cluster_places_parser.add_argument("--yes", action="store_true")
+    cluster_places_parser.add_argument("--json", action="store_true", dest="as_json")
     cluster_places_parser.add_argument("--output", type=Path, default=None)
     cluster_places_parser.add_argument("--places-path", type=Path, default=DEFAULT_PRIVATE_PLACES_PATH)
 
@@ -1221,8 +1912,10 @@ def build_parser() -> argparse.ArgumentParser:
     assign_places_parser.add_argument("--from", dest="from_date", default=None)
     assign_places_parser.add_argument("--to", dest="to_date", default=None)
     assign_places_parser.add_argument("--all", action="store_true")
-    assign_places_parser.add_argument("--path", type=Path, default=DEFAULT_PRIVATE_PLACES_PATH)
+    assign_places_parser.add_argument("--path", type=Path, default=None)
     assign_places_parser.add_argument("--dry-run", action="store_true")
+    assign_places_parser.add_argument("--yes", action="store_true")
+    assign_places_parser.add_argument("--json", action="store_true", dest="as_json")
 
     place_stats_parser = subparsers.add_parser(
         "place-stats",
@@ -1559,6 +2252,63 @@ def run_generate_report_cli(
     print(f"- mode: {mode}")
     print(f"- examples: {examples}")
     return 0
+
+
+def run_build_portfolio_html_cli(
+    *,
+    output: Path,
+    mode: str,
+    source_report: Path | None,
+    check_privacy: bool,
+    open_browser: bool,
+    force: bool,
+) -> int:
+    payload = build_portfolio_html(
+        PortfolioHtmlOptions(
+            output_html=output,
+            mode=mode,
+            source_report=source_report,
+            check_privacy=check_privacy,
+            force=force,
+        )
+    )
+    print("Generated portfolio HTML:")
+    print(f"- html: {payload['output_html']}")
+    print(f"- build json: {Path(payload['output_html']).with_name(Path(payload['output_html']).stem + '_build.json')}")
+    print(f"- mode: {payload['mode']}")
+    print(f"- privacy_check_passed: {payload['privacy_check_passed']}")
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(Path(payload["output_html"]).resolve().as_uri())
+    return 0
+
+
+def run_release_check_cli(
+    db_path: Path | None,
+    *,
+    version: str,
+    save_manifest: bool,
+    output: Path,
+    eval_path: Path | None,
+    run_pytest: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    manifest = build_release_manifest(
+        repository,
+        version=version,
+        eval_path=eval_path,
+        save_manifest=save_manifest,
+        output=output,
+        run_pytest=run_pytest,
+    )
+    if as_json:
+        print(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_release_manifest(manifest, output=output if save_manifest else None))
+    return 0 if manifest.get("db_check", {}).get("strict_ok") and manifest.get("portfolio_html", {}).get("privacy_check_passed") else 1
 
 
 def run_month_plan_cli(
@@ -1929,6 +2679,7 @@ def run_qa(
     limit: int,
     include_hidden: bool,
     as_json: bool,
+    public_mode: bool = False,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
@@ -1943,6 +2694,7 @@ def run_qa(
         limit=limit,
         include_hidden=include_hidden,
         multimodal_config=multimodal_config,
+        public_mode=public_mode,
     )
     if as_json:
         print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
@@ -1955,20 +2707,27 @@ def run_batch_qa(
     db_path: Path | None,
     queries: Sequence[str],
     *,
+    queries_file: Path | None = None,
     limit: int,
     include_hidden: bool,
     config_path: Path | None,
     output_json: Path | None,
     output_md: Path | None,
     save_run: bool,
+    continue_on_error: bool = True,
+    include_full_answer: bool = False,
+    summary_only: bool = False,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
+    all_queries = _load_batch_queries(queries, queries_file)
+    if not all_queries:
+        raise SystemExit("batch-qa requires --query or --queries-file")
     multimodal_config = _load_multimodal_runtime_config(config_path)
     multimodal_engine = _cached_batch_multimodal_engine(multimodal_config)
     started = datetime.now()
     rows: list[dict[str, object]] = []
-    for query in queries:
+    for query in all_queries:
         query_started = time.perf_counter()
         try:
             result = route_query(
@@ -1980,7 +2739,8 @@ def run_batch_qa(
                 multimodal_engine=multimodal_engine,
             )
             elapsed = time.perf_counter() - query_started
-            answer = redact_text(result.answer, max_chars=2000)
+            answer_summary = redact_text(result.answer, max_chars=500)
+            answer = "" if summary_only else redact_text(result.answer, max_chars=8000 if include_full_answer else 2000)
             rows.append(
                 {
                     "query": query,
@@ -1990,9 +2750,12 @@ def run_batch_qa(
                     "success": bool(result.answer.strip()),
                     "elapsed_sec": round(elapsed, 3),
                     "answer": answer,
-                    "answer_summary": redact_text(result.answer, max_chars=500),
+                    "answer_summary": answer_summary,
                     "result_count": len(result.results),
+                    "top_dates": _top_dates_from_results(result.results),
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
                     "results": result.results[:5],
+                    "metadata": result.metadata or {},
                     "intent_reasons": result.intent_reasons,
                     "error_message": None,
                 }
@@ -2009,10 +2772,14 @@ def run_batch_qa(
                     "answer": "",
                     "answer_summary": "",
                     "result_count": 0,
+                    "top_dates": [],
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
                     "error_message": f"{exc.__class__.__name__}: {exc}",
                     "error": f"{exc.__class__.__name__}: {exc}",
                 }
             )
+            if not continue_on_error:
+                break
     report = {
         "created_at": started.isoformat(timespec="seconds"),
         "queries": rows,
@@ -2042,7 +2809,30 @@ def run_batch_qa(
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(_format_batch_qa_markdown(report), encoding="utf-8")
     print(_format_batch_qa_text(report, json_path=json_path, md_path=md_path))
-    return 0
+    failed = int(report["summary"]["failed"])  # type: ignore[index]
+    return 1 if failed and not continue_on_error else 0
+
+
+def _load_batch_queries(queries: Sequence[str], queries_file: Path | None) -> list[str]:
+    loaded = [query.strip() for query in queries if query and query.strip()]
+    if queries_file is not None:
+        for line in queries_file.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                loaded.append(stripped)
+    return loaded
+
+
+def _top_dates_from_results(results: list[dict[str, object]]) -> list[str]:
+    dates: list[str] = []
+    for row in results:
+        raw = row.get("date") or row.get("captured_at") or row.get("start_time")
+        date_value = str(raw or "")[:10]
+        if date_value and date_value not in dates:
+            dates.append(date_value)
+        if len(dates) >= 5:
+            break
+    return dates
 
 
 def _load_multimodal_runtime_config(config_path: Path | None) -> dict[str, object]:
@@ -2104,6 +2894,7 @@ def _format_batch_qa_text(report: dict[str, object], *, json_path: Path | None, 
                 f"{index}. {row['query']}",
                 f"   intent: {row.get('intent')} routing: {row.get('routing')} elapsed={row.get('elapsed_sec')}s",
                 f"   success: {row.get('success')} results={row.get('result_count')}",
+                f"   top_dates: {', '.join(row.get('top_dates') or [])}",
                 f"   answer: {row.get('answer_summary')}",
             ]
         )
@@ -2143,6 +2934,7 @@ def _format_batch_qa_markdown(report: dict[str, object]) -> str:
                 f"- success: {row.get('success')}",
                 f"- elapsed_sec: {row.get('elapsed_sec')}",
                 f"- result_count: {row.get('result_count')}",
+                f"- top_dates: {', '.join(row.get('top_dates') or [])}",
                 "",
                 str(row.get("answer_summary") or ""),
                 "",
@@ -2472,6 +3264,8 @@ def run_retry_vlm_failed_cli(
     dry_run: bool,
     allow_fake_write: bool,
     rerun_model: bool = False,
+    force: bool = False,
+    save_report: bool = False,
 ) -> int:
     start_date, end_date = _resolve_range_selection(
         date_value=date_value,
@@ -2511,6 +3305,12 @@ def run_retry_vlm_failed_cli(
         limit=limit,
         engine=resolved_engine,
     )
+    if save_report:
+        output_dir = Path("eval_outputs/maintenance")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"retry_vlm_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_path.write_text(json.dumps(repair_report, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        repair_report["output_path"] = str(output_path)
     print(format_recover_failed_vlm_report(repair_report))
     if not rerun_model:
         if repair_report.get("unrecovered"):
@@ -3053,6 +3853,109 @@ def run_multimodal_search_cli(
     return 0
 
 
+def run_food_search_debug_cli(
+    db_path: Path | None,
+    *,
+    query: str,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    backend: str,
+    config_path: Path | None,
+    as_json: bool,
+) -> int:
+    resolved_config_path = config_path
+    if resolved_config_path is None:
+        default_private_config = Path("private_config/model_runtime.yaml")
+        resolved_config_path = default_private_config if default_private_config.exists() else None
+    config = load_model_runtime_config(resolved_config_path).multimodal_embedding
+    food_info = specific_food_query_info(query) or {
+        "key": None,
+        "display_name": None,
+        "triggers": [],
+        "specific_terms": [],
+        "generic_terms": [],
+    }
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = multimodal_search(
+        repository,
+        MultimodalSearchOptions(
+            query=query,
+            date_from=from_date,
+            date_to=to_date,
+            limit=limit,
+            backend=backend,  # type: ignore[arg-type]
+            engine_name=config.engine,
+            model_name=config.model_name,
+            model_path=config.model_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+        ),
+        engine=get_multimodal_embedding_engine(
+            config.engine,
+            model_name=config.model_name,
+            model_path=config.model_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+        ),
+    )
+    payload = {
+        "query": query,
+        "food_info": food_info,
+        "expanded_terms": expand_visual_query_terms(query),
+        "backend": backend,
+        "results": report.get("results") or [],
+        "embedding_status": report.get("embedding_status") or {},
+    }
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+
+    lines = [
+        f"Food search debug: {query}",
+        f"- backend: {backend}",
+        f"- specific_food: {food_info.get('display_name') or 'none'}",
+        f"- specific_terms: {', '.join(list(food_info.get('specific_terms') or [])[:20]) or 'none'}",
+        f"- generic_terms_penalized: {', '.join(list(food_info.get('generic_terms') or [])[:20]) or 'none'}",
+        f"- expanded_terms: {', '.join(payload['expanded_terms'][:30])}",
+        f"- total_results: {report.get('total', 0)}",
+    ]
+    embedding_status = report.get("embedding_status") or {}
+    if embedding_status.get("reason"):
+        lines.append(f"- embedding_status: {embedding_status.get('reason')}")
+    for index, row in enumerate(report.get("results") or [], start=1):
+        components = row.get("score_components") or {}
+        specific_matches = row.get("specific_food_matched_terms") or []
+        generic_matches = row.get("generic_food_matched_terms") or []
+        if specific_matches:
+            why = "included: specific dish term matched"
+        elif generic_matches:
+            why = "included weakly: generic food terms only"
+        else:
+            why = "included weakly: context or embedding fallback"
+        lines.append(
+            f"{index}. {row.get('date')} {str(row.get('captured_at') or '')[11:16]} "
+            f"score={components.get('final_score')} strength={row.get('evidence_strength')} media={row.get('media_id')}"
+        )
+        if row.get("caption"):
+            lines.append(f"   caption: {row.get('caption')}")
+        if row.get("food_cues"):
+            lines.append(f"   food_cues: {', '.join(row.get('food_cues') or [])}")
+        lines.append(f"   matched_specific: {', '.join(specific_matches) or 'none'}")
+        lines.append(f"   matched_generic: {', '.join(generic_matches) or 'none'}")
+        lines.append(f"   why: {why}")
+        lines.append(f"   score_components: {json.dumps(components, ensure_ascii=False, sort_keys=True)}")
+    print("\n".join(lines))
+    return 0
+
+
 def run_vlm_prompt(*, template: str, as_json: bool) -> int:
     try:
         prompt_template = get_vlm_prompt_template(template)
@@ -3259,6 +4162,14 @@ def run_ocr_images_cli(
     dry_run: bool,
     force: bool,
     skip_existing: bool,
+    text_cues_only: bool = False,
+    vlm_text_hint_only: bool = False,
+    has_vlm_text: bool = False,
+    ocr_priority: bool = False,
+    contains_text_hint: bool = False,
+    caption_keywords: str | None = None,
+    min_vlm_confidence: float | None = None,
+    only_existing_files: bool = True,
 ) -> int:
     start_date, end_date = _resolve_range_selection(
         date_value=date_value,
@@ -3289,11 +4200,272 @@ def run_ocr_images_cli(
             dry_run=dry_run,
             force=force,
             skip_existing=skip_existing,
+            text_cues_only=text_cues_only,
+            vlm_text_hint_only=vlm_text_hint_only,
+            has_vlm_text=has_vlm_text,
+            ocr_priority=ocr_priority,
+            contains_text_hint=contains_text_hint,
+            caption_keywords=_parse_caption_keywords(caption_keywords),
+            min_vlm_confidence=min_vlm_confidence,
+            only_existing_files=only_existing_files,
         ),
         engine=get_ocr_engine(resolved_engine_name, config=ocr_config),
         progress_callback=progress,
     )
     print(format_ocr_report(report))
+    return 0
+
+
+def run_retry_ocr_failed_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    engine_name: str | None,
+    config_path: Path | None,
+    languages: str | None,
+    dry_run: bool,
+    save_report: bool = False,
+) -> int:
+    start_date, end_date = _resolve_range_selection(
+        date_value=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        all_dates=False,
+        command_name="retry-ocr-failed",
+        allow_all_without_dates=False,
+    )
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = repository.list_media_ocr(
+        start_date=start_date,
+        end_date=end_date,
+        statuses=["failed", "engine_unavailable"],
+        limit=max(limit, 0),
+    )
+    media_ids = [str(row.get("media_id")) for row in rows if row.get("media_id")]
+    if dry_run:
+        print("Retry OCR failed dry-run")
+        print(f"- range: {start_date}..{end_date}")
+        print(f"- selected rows: {len(media_ids)}")
+        for media_id in media_ids[:20]:
+            print(f"- {media_id}")
+        return 0
+    ocr_config = load_ocr_runtime_config(config_path)
+    resolved_engine_name = engine_name or ocr_config.engine
+    resolved_languages = languages or ocr_config.languages
+    report = run_ocr_images(
+        repository,
+        OcrImagesOptions(
+            start_date=start_date,
+            end_date=end_date,
+            limit=max(limit, 0),
+            engine_name=resolved_engine_name,
+            languages=_parse_languages(resolved_languages),
+            dry_run=False,
+            force=True,
+            media_ids=media_ids,
+            only_existing_files=True,
+        ),
+        engine=get_ocr_engine(resolved_engine_name, config=ocr_config),
+    )
+    if save_report:
+        output_dir = Path("eval_outputs/maintenance")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"retry_ocr_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        payload = {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "range": {"from": start_date, "to": end_date},
+            "selected_media_ids": media_ids,
+            "report": {
+                "selected_images": report.selected_images,
+                "processed": report.processed,
+                "success": report.success,
+                "no_text": report.no_text,
+                "failed": report.failed,
+                "skipped": report.skipped,
+                "engine_unavailable": report.engine_unavailable,
+                "dry_run": report.dry_run,
+                "engine": report.engine,
+                "languages": report.languages,
+                "rows": report.rows,
+            },
+        }
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        print(f"report: {output_path}")
+    print(format_ocr_report(report))
+    return 0
+
+
+def run_retry_embedding_failed_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    embedding_type: str,
+    engine_name: str | None,
+    model_name: str | None,
+    model_path: str | None,
+    config_path: Path | None,
+    dry_run: bool,
+    force: bool,
+) -> int:
+    start_date, end_date = _resolve_range_selection(
+        date_value=date_value,
+        from_date=from_date,
+        to_date=to_date,
+        all_dates=False,
+        command_name="retry-embedding-failed",
+        allow_all_without_dates=False,
+    )
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    embedding_repository = MediaEmbeddingRepository(repository.db_path)
+    types = ["image", "caption", "ocr", "combined_text"] if embedding_type == "all" else [embedding_type]
+    failed_rows: dict[str, list[dict[str, object]]] = {}
+    for current_type in types:
+        failed_rows[current_type] = embedding_repository.list_embeddings(
+            embedding_type=current_type,
+            statuses=["failed", "engine_unavailable"],
+            start_date=start_date,
+            end_date=end_date,
+            limit=max(limit, 0),
+        )
+    if dry_run:
+        print("Retry embedding failed dry-run")
+        print(f"- range: {start_date}..{end_date}")
+        for current_type, rows in failed_rows.items():
+            print(f"- {current_type}: {len(rows)}")
+            for row in rows[:10]:
+                print(f"  - {row.get('media_id')} status={row.get('status')}")
+        return 0
+    config = load_model_runtime_config(config_path).multimodal_embedding
+    resolved_engine = engine_name or config.engine
+    resolved_model = model_name or config.model_name
+    resolved_path = model_path or config.model_path
+    engine = get_multimodal_embedding_engine(
+        resolved_engine,
+        model_name=resolved_model,
+        model_path=resolved_path,
+        device=config.device,
+        dtype=config.dtype,
+        local_files_only=config.local_files_only,
+        embedding_dim=config.embedding_dim,
+        batch_size=config.batch_size,
+    )
+    reports = []
+    for current_type, rows in failed_rows.items():
+        media_ids = [str(row.get("media_id")) for row in rows if row.get("media_id")]
+        if not media_ids:
+            continue
+        options = BuildMediaEmbeddingsOptions(
+            start_date=start_date,
+            end_date=end_date,
+            limit=max(limit, 0),
+            embedding_type=current_type,  # type: ignore[arg-type]
+            engine_name=resolved_engine,
+            model_name=resolved_model,
+            model_path=resolved_path,
+            device=config.device,
+            dtype=config.dtype,
+            local_files_only=config.local_files_only,
+            embedding_dim=config.embedding_dim,
+            batch_size=config.batch_size,
+            dry_run=False,
+            force=True,
+            skip_existing=False,
+            media_ids=media_ids,
+        )
+        report = (
+            build_image_embeddings(repository, options, engine=engine)
+            if current_type == "image"
+            else build_text_embeddings(repository, options, engine=engine)
+        )
+        reports.append(report)
+        print(format_embedding_build_report(report))
+    if not reports:
+        print("Retry embedding failed: no failed or engine_unavailable rows selected.")
+    return 0
+
+
+def run_ocr_priority_cli(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    caption_keywords: str | None,
+    min_vlm_confidence: float | None,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = ocr_priority_candidates(
+        repository,
+        start_date=from_date,
+        end_date=to_date or from_date,
+        limit=limit,
+        caption_keywords=_parse_caption_keywords(caption_keywords),
+        min_vlm_confidence=min_vlm_confidence,
+    )
+    payload = {
+        "range": {"from": from_date, "to": to_date or from_date},
+        "total": len(rows),
+        "results": rows,
+    }
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    lines = [
+        "OCR Priority",
+        f"- range: {from_date or 'all'}..{to_date or from_date or 'all'}",
+        f"- results: {len(rows)}",
+    ]
+    for index, row in enumerate(rows, start=1):
+        lines.extend(
+            [
+                "",
+                f"{index}. {row.get('captured_at') or ''} media_id={row.get('media_id')}",
+                f"   file: {redact_text(row.get('file_name'), max_chars=80)}",
+                f"   score: {row.get('priority_score')} reason: {row.get('priority_reason')}",
+                f"   ocr_status: {row.get('already_ocr_status') or 'not_run'}",
+                f"   caption: {row.get('caption') or ''}",
+                f"   text_cues: {', '.join(str(item) for item in row.get('text_cues') or [])}",
+            ]
+        )
+    print("\n".join(lines))
+    return 0
+
+
+def run_missing_files_cli(
+    db_path: Path | None,
+    *,
+    limit: int,
+    export_path: Path | None,
+    mark_unavailable: bool,
+    yes: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = collect_missing_files(repository, limit=limit)
+    if export_path is not None:
+        full_report = collect_missing_files(repository, limit=1_000_000)
+        export_missing_files(full_report, export_path)
+        report.exported_path = full_report.exported_path
+    if mark_unavailable and yes:
+        report.marked_unavailable = mark_missing_media_unavailable(repository)
+    if mark_unavailable and not yes:
+        # Keep this command non-destructive by default.
+        pass
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_missing_files(report, mark_unavailable=mark_unavailable, yes=yes))
     return 0
 
 
@@ -3396,6 +4568,675 @@ def run_ocr_search_cli(
             ]
         )
     print("\n".join(lines))
+    return 0
+
+
+def run_face_diagnostics_cli(
+    *,
+    config_path: Path | None,
+    model_path: str | None,
+    as_json: bool,
+) -> int:
+    config = load_face_detection_runtime_config(config_path)
+    report = face_diagnostics(yunet_model_path=model_path or config.model_path)
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_diagnostics(report))
+    return 0
+
+
+def run_face_detect_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    engine_name: str | None,
+    config_path: Path | None,
+    model_path: str | None,
+    score_threshold: float | None,
+    nms_threshold: float | None,
+    top_k: int | None,
+    max_input_size: int | None,
+    dry_run: bool,
+    skip_existing: bool,
+    force: bool,
+    min_score: float | None,
+    save_crops: bool,
+    only_existing_files: bool,
+    include_hidden: bool,
+    as_json: bool,
+) -> int:
+    if date_value and (from_date or to_date):
+        raise ValueError("face-detect accepts either --date or --from/--to, not both")
+    config = load_face_detection_runtime_config(config_path)
+    resolved_engine = engine_name or config.engine
+    resolved_model_path = model_path or config.model_path
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = run_face_detection(
+        repository,
+        FaceDetectOptions(
+            date=date_value,
+            start_date=from_date,
+            end_date=to_date or from_date,
+            limit=limit,
+            engine=resolved_engine,
+            model_path=resolved_model_path,
+            score_threshold=score_threshold if score_threshold is not None else config.score_threshold,
+            nms_threshold=nms_threshold if nms_threshold is not None else config.nms_threshold,
+            top_k=top_k if top_k is not None else config.top_k,
+            max_input_size=max_input_size if max_input_size is not None else config.max_input_size,
+            dry_run=dry_run,
+            skip_existing=skip_existing,
+            force=force,
+            min_score=min_score,
+            save_crops=save_crops,
+            only_existing_files=only_existing_files,
+            include_hidden=include_hidden,
+        ),
+    )
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_detect_report(report))
+    return 0
+
+
+def run_face_stats_cli(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = face_stats(repository, date_from=from_date, date_to=to_date or from_date)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_stats(report))
+    return 0
+
+
+def run_face_show_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    status: str | None,
+    review_status: str | None,
+    limit: int,
+    show_errors: bool,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_face_detections(
+        repository,
+        date=date_value,
+        date_from=from_date,
+        date_to=to_date or from_date,
+        status=status,
+        review_status=review_status,
+        limit=limit,
+    )
+    if as_json:
+        print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_rows(rows, show_errors=show_errors))
+    return 0
+
+
+def run_face_review_queue_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    min_score: float | None,
+    has_crop: bool,
+    limit: int,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_face_detections(
+        repository,
+        date=date_value,
+        date_from=from_date,
+        date_to=to_date or from_date,
+        review_status="unreviewed",
+        min_score=min_score,
+        has_crop=has_crop,
+        limit=limit,
+    )
+    if as_json:
+        print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_rows(rows, show_errors=False))
+    return 0
+
+
+def run_update_face_detection_cli(
+    db_path: Path | None,
+    *,
+    face_id: str,
+    review_status: str,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    row = update_face_review_status(repository, face_id=face_id, review_status=review_status)
+    if as_json:
+        print(json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(f"updated face detection: {row.get('id')} review_status={row.get('review_status')}")
+    return 0
+
+
+def run_face_embedding_diagnostics_cli(
+    *,
+    config_path: Path | None,
+    engine_name: str | None,
+    as_json: bool,
+) -> int:
+    report = face_embedding_diagnostics(config_path=config_path, engine_name=engine_name)
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_embedding_diagnostics(report))
+    return 0
+
+
+def run_face_embed_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int,
+    engine_name: str | None,
+    detections_engine: str | None,
+    status: str,
+    config_path: Path | None,
+    dry_run: bool,
+    skip_existing: bool,
+    force: bool,
+    replace: bool,
+    batch_size: int,
+    only_with_crop: bool,
+    only_existing_files: bool,
+    save_report: bool,
+    only_reviewed_detections: bool,
+    include_unreviewed_detections: bool,
+    min_detection_score: float | None,
+    as_json: bool,
+) -> int:
+    if date_value and (from_date or to_date):
+        raise ValueError("face-embed accepts either --date or --from/--to, not both")
+    embedding_config, _ = load_face_runtime_config(config_path)
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = run_face_embedding(
+        repository,
+        FaceEmbeddingOptions(
+            date=date_value,
+            start_date=from_date,
+            end_date=to_date or from_date,
+            limit=limit,
+            engine=engine_name or embedding_config.engine,
+            detections_engine=detections_engine,
+            status=status,
+            model_path=embedding_config.model_path,
+            embedding_dim=embedding_config.embedding_dim,
+            normalize=embedding_config.normalize,
+            dry_run=dry_run,
+            skip_existing=skip_existing,
+            force=force,
+            replace=replace,
+            batch_size=batch_size,
+            only_with_crop=only_with_crop,
+            only_existing_files=only_existing_files,
+            only_reviewed_detections=only_reviewed_detections,
+            include_unreviewed_detections=include_unreviewed_detections,
+            min_detection_score=min_detection_score,
+        ),
+    )
+    if save_report:
+        output_dir = Path("reports")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"face_embed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_path.write_text(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        print(f"report: {output_path}")
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_embedding_report(report))
+    return 0
+
+
+def run_face_embedding_stats_cli(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = face_embedding_stats(repository, date_from=from_date, date_to=to_date)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_embedding_stats(report))
+    return 0
+
+
+def run_face_cluster_cli(
+    db_path: Path | None,
+    *,
+    date_value: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    method: str | None,
+    config_path: Path | None,
+    distance_threshold: float | None,
+    min_samples: int | None,
+    dry_run: bool,
+    yes: bool,
+    replace: bool,
+    scope: str | None,
+    embedding_model: str | None,
+    save_report: bool,
+    as_json: bool,
+) -> int:
+    if date_value and (from_date or to_date):
+        raise ValueError("face-cluster accepts either --date or --from/--to, not both")
+    if not dry_run and not yes:
+        raise ValueError("face-cluster real writes require --yes")
+    _, cluster_config = load_face_runtime_config(config_path)
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = run_face_clustering(
+        repository,
+        FaceClusteringOptions(
+            date=date_value,
+            start_date=from_date,
+            end_date=to_date or from_date,
+            method=method or cluster_config.method,
+            distance_threshold=distance_threshold if distance_threshold is not None else cluster_config.distance_threshold,
+            min_samples=min_samples if min_samples is not None else cluster_config.min_samples,
+            dry_run=dry_run,
+            replace=replace,
+            scope=scope,
+            embedding_model=embedding_model,
+        ),
+    )
+    if save_report:
+        output_dir = Path("reports")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"face_cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_path.write_text(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        print(f"report: {output_path}")
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_cluster_report(report))
+    return 0
+
+
+def run_face_cluster_stats_cli(db_path: Path | None, *, as_json: bool) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = face_cluster_stats(repository)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_cluster_stats(report))
+    return 0
+
+
+def run_face_cluster_show_cli(
+    db_path: Path | None,
+    *,
+    cluster_id: str | None,
+    status: str | None,
+    limit: int,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_face_clusters(repository, cluster_id=cluster_id, status=status, limit=limit)
+    if as_json:
+        print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_face_clusters(rows))
+    return 0
+
+
+def run_update_face_cluster_cli(
+    db_path: Path | None,
+    *,
+    cluster_id: str,
+    status: str,
+    as_json: bool,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    row = update_face_cluster_status(repository, cluster_id=cluster_id, status=status)
+    if as_json:
+        print(json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(f"updated face cluster: {row.get('id')} status={row.get('status')} review_status={row.get('review_status')}")
+    return 0
+
+
+def run_persons_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    command = args.persons_command
+    if command == "list":
+        rows = list_persons(repository, limit=args.limit, public_mode=args.public_mode)
+        if args.as_json:
+            print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_persons(rows))
+        return 0
+    if command == "create":
+        row = create_person(
+            repository,
+            name=args.name,
+            public_name=args.public_name,
+            privacy_level=args.privacy_level,
+            notes=args.notes,
+        )
+        if args.as_json:
+            print(json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"created person: {row.get('id')} name={row.get('display_name')} privacy={row.get('privacy_level')}")
+        return 0
+    if command == "show":
+        row = get_person(repository, args.person_id, public_mode=args.public_mode)
+        if args.as_json:
+            print(json.dumps(row or {}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_person_detail(row))
+        return 0
+    if command == "update":
+        row = update_person(
+            repository,
+            person_id=args.person_id,
+            name=args.name,
+            public_name=args.public_name,
+            privacy_level=args.privacy_level,
+            notes=args.notes,
+        )
+        if args.as_json:
+            print(json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"updated person: {row.get('id')} name={row.get('display_name')} privacy={row.get('privacy_level')}")
+        return 0
+    if command == "add-alias":
+        row = add_person_alias(repository, person_id=args.person_id, alias=args.alias, source=args.source)
+        if args.as_json:
+            print(json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"added alias for person: {row.get('id')}")
+        return 0
+    if command == "link-face-cluster":
+        result = link_person_face_cluster(repository, person_id=args.person_id, cluster_id=args.cluster_id, yes=args.yes)
+        if args.as_json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"linked person {args.person_id} to face cluster {args.cluster_id}")
+        return 0
+    if command == "unlink-face-cluster":
+        result = unlink_person_face_cluster(repository, person_id=args.person_id, cluster_id=args.cluster_id, yes=args.yes)
+        if args.as_json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"unlinked person {args.person_id} from face cluster {args.cluster_id} deleted={result.get('deleted')}")
+        return 0
+    if command == "anonymize-preview":
+        rows = anonymize_preview(repository)
+        if args.as_json:
+            print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_anonymize_preview(rows))
+        return 0
+    raise ValueError(f"unknown persons command: {command}")
+
+
+def run_line_speakers_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    command = args.line_speakers_command
+    if command == "list":
+        rows = list_line_speakers(repository, limit=args.limit)
+        if args.as_json:
+            print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_line_speakers(rows))
+        return 0
+    if command == "link-person":
+        result = link_line_speaker_to_person(
+            repository,
+            chat_id=args.chat_id,
+            speaker_name=args.speaker_name,
+            person_id=args.person_id,
+            yes=args.yes,
+            add_alias=args.add_alias,
+        )
+        if args.as_json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            person = result.get("person") or {}
+            print(
+                f"linked LINE speaker chat_id={result.get('chat_id')} speaker={result.get('speaker_name')} "
+                f"to person={person.get('id')}"
+            )
+        return 0
+    if command == "unlink-person":
+        result = unlink_line_speaker_from_person(
+            repository,
+            chat_id=args.chat_id,
+            speaker_name=args.speaker_name,
+            person_id=args.person_id,
+            yes=args.yes,
+        )
+        if args.as_json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(
+                f"unlinked LINE speaker chat_id={result.get('chat_id')} speaker={result.get('speaker_name')} "
+                f"from person={result.get('person_id')} deleted={result.get('deleted')}"
+            )
+        return 0
+    if command == "show-links":
+        rows = list_line_speaker_links(repository, limit=args.limit)
+        if args.as_json:
+            print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_line_speaker_links(rows))
+        return 0
+    if command == "suggest":
+        rows = suggest_line_speaker_persons(repository, speaker_name=args.speaker_name, limit=args.limit)
+        if args.as_json:
+            print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(format_line_speaker_suggestions(rows))
+        return 0
+    raise ValueError(f"unknown line-speakers command: {command}")
+
+
+def run_build_media_people_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = build_media_people(
+        repository,
+        start_date=args.from_date,
+        end_date=args.to_date,
+        dry_run=args.dry_run,
+        replace=args.replace,
+        yes=args.yes,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_people_build_report(report, title="Build media_people"))
+    return 0
+
+
+def run_build_event_people_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = build_event_people(
+        repository,
+        start_date=args.from_date,
+        end_date=args.to_date,
+        dry_run=args.dry_run,
+        replace=args.replace,
+        yes=args.yes,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_people_build_report(report, title="Build event_people"))
+    return 0
+
+
+def run_people_stats_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = people_stats(
+        repository,
+        start_date=args.from_date,
+        end_date=args.to_date,
+        public_mode=args.public_mode,
+        limit=args.limit,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_people_stats(report))
+    return 0
+
+
+def run_event_people_show_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_event_people(
+        repository,
+        date_value=args.date,
+        event_id=args.event_id,
+        public_mode=args.public_mode,
+        limit=args.limit,
+    )
+    if args.as_json:
+        print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_event_people(rows))
+    return 0
+
+
+def run_media_people_show_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    rows = list_media_people(
+        repository,
+        date_value=args.date,
+        public_mode=args.public_mode,
+        limit=args.limit,
+    )
+    if args.as_json:
+        print(json.dumps({"results": rows}, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_media_people(rows))
+    return 0
+
+
+def run_privacy_audit_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = privacy_audit(
+        repository,
+        public=args.public_mode,
+        public_paths=args.path,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_privacy_audit(report))
+    return 0 if report.get("passed") else 1
+
+
+def run_person_export_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = person_export(
+        repository,
+        person_id=args.person_id,
+        output=args.output,
+        mode=args.mode,
+        dry_run=args.dry_run,
+        yes=args.yes,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_privacy_operation(report, title="Person export"))
+    return 0
+
+
+def run_person_detach_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = person_detach(repository, person_id=args.person_id, dry_run=args.dry_run, yes=args.yes)
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_privacy_operation(report, title="Person detach"))
+    return 0
+
+
+def run_person_delete_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = person_delete(
+        repository,
+        person_id=args.person_id,
+        soft=args.soft,
+        hard_delete=args.hard_delete,
+        dry_run=args.dry_run,
+        yes=args.yes,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_privacy_operation(report, title="Person delete"))
+    return 0
+
+
+def run_face_delete_data_cli(db_path: Path | None, args: argparse.Namespace) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = face_delete_data(
+        repository,
+        face_id=args.face_id,
+        delete_crop=args.delete_crop,
+        delete_embedding=args.delete_embedding,
+        dry_run=args.dry_run,
+        yes=args.yes,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    else:
+        print(format_privacy_operation(report, title="Face delete data"))
     return 0
 
 
@@ -3931,6 +5772,182 @@ def run_places_redact_preview(path: Path) -> int:
     return 0
 
 
+def run_places_list_clusters(
+    db_path: Path | None,
+    *,
+    limit: int,
+    status: str | None = None,
+    privacy_level: str | None = None,
+    category: str | None = None,
+    search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    min_points: int | None = None,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(
+        format_cluster_list(
+            list_place_clusters(
+                repository,
+                limit=limit,
+                status=status,
+                privacy_level=privacy_level,
+                category=category,
+                search_text=search,
+                start_date=from_date,
+                end_date=to_date,
+                min_points=min_points,
+            )
+        )
+    )
+    return 0
+
+
+def run_places_show_cluster(db_path: Path | None, *, cluster_id: str, show_exact: bool) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(format_cluster_detail(get_place_cluster_detail(repository, cluster_id, include_exact=show_exact)))
+    return 0
+
+
+def run_places_create(
+    db_path: Path | None,
+    *,
+    place_id: str | None,
+    name: str,
+    public_name: str | None,
+    category: str,
+    cluster_id: str | None,
+    aliases: list[str],
+    privacy_level: str,
+    manual_verified: bool,
+    notes: str | None,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    place = create_place(
+        repository,
+        place_id=place_id,
+        display_name=name,
+        public_name=public_name,
+        category=category,
+        cluster_id=cluster_id,
+        aliases=aliases,
+        privacy_level=privacy_level,
+        manual_verified=manual_verified,
+        notes=notes,
+    )
+    print(format_place_row(place))
+    return 0
+
+
+def run_places_link_cluster(
+    db_path: Path | None,
+    *,
+    place_id: str,
+    cluster_id: str,
+    yes: bool,
+) -> int:
+    if not yes:
+        print("Refusing to link cluster without --yes.")
+        return 2
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(format_place_row(link_place_cluster(repository, place_id=place_id, cluster_id=cluster_id)))
+    return 0
+
+
+def run_places_update(
+    db_path: Path | None,
+    *,
+    place_id: str,
+    name: str | None,
+    public_name: str | None,
+    category: str | None,
+    privacy_level: str | None,
+    manual_verified: bool | None,
+    notes: str | None,
+) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(
+        format_place_row(
+            update_place(
+                repository,
+                place_id=place_id,
+                display_name=name,
+                public_name=public_name,
+                category=category,
+                privacy_level=privacy_level,
+                manual_verified=manual_verified,
+                notes=notes,
+            )
+        )
+    )
+    return 0
+
+
+def run_places_add_alias(db_path: Path | None, *, place_id: str, alias: str) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(format_place_row(add_place_alias(repository, place_id=place_id, alias=alias)))
+    return 0
+
+
+def run_places_set_privacy(db_path: Path | None, *, place_id: str, privacy_level: str) -> int:
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    print(format_place_row(set_place_privacy(repository, place_id=place_id, privacy_level=privacy_level)))
+    return 0
+
+
+def run_places_update_cluster_status(db_path: Path | None, *, cluster_id: str, status: str, yes: bool) -> int:
+    if not yes:
+        print(f"Refusing to set cluster status={status} without --yes.")
+        return 2
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    row = update_place_cluster_status(repository, cluster_id=cluster_id, status=status)
+    print(format_cluster_list([row]))
+    return 0
+
+
+def run_places_unlink_cluster(db_path: Path | None, *, cluster_id: str, yes: bool) -> int:
+    if not yes:
+        print("Refusing to unlink cluster without --yes.")
+        return 2
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    count = unlink_place_cluster(repository, cluster_id=cluster_id)
+    print(f"Unlinked places from cluster {cluster_id}: {count}")
+    return 0
+
+
+def run_build_location_points(
+    db_path: Path | None,
+    *,
+    from_date: str | None,
+    to_date: str | None,
+    dry_run: bool,
+    yes: bool,
+    as_json: bool,
+) -> int:
+    if not dry_run and not yes:
+        print("Refusing to write location_points without --yes. Use --dry-run first.")
+        return 2
+    repository = LifelogRepository(resolve_db_path(db_path))
+    repository.initialize()
+    report = build_location_points_from_media(
+        repository,
+        start_date=from_date,
+        end_date=to_date or from_date,
+        dry_run=dry_run,
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) if as_json else format_location_point_build_report(report))
+    return 0
+
+
 def run_cluster_places(
     db_path: Path | None,
     *,
@@ -3939,6 +5956,11 @@ def run_cluster_places(
     all_dates: bool,
     radius_m: float,
     min_points: int,
+    eps_meters: float | None,
+    min_samples: int | None,
+    dry_run: bool,
+    yes: bool,
+    as_json: bool,
     output: Path | None,
     places_path: Path | None,
 ) -> int:
@@ -3950,6 +5972,22 @@ def run_cluster_places(
         command_name="cluster-places",
         allow_all_without_dates=True,
     )
+    if eps_meters is not None or min_samples is not None or dry_run or yes:
+        if not dry_run and not yes:
+            print("Refusing to write place_clusters without --yes. Use --dry-run first.")
+            return 2
+        repository = LifelogRepository(resolve_db_path(db_path))
+        repository.initialize()
+        report = cluster_location_points(
+            repository,
+            start_date=start_date,
+            end_date=end_date,
+            eps_meters=float(eps_meters if eps_meters is not None else radius_m),
+            min_samples=int(min_samples if min_samples is not None else min_points),
+            dry_run=dry_run,
+        )
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) if as_json else format_cluster_build_report(report))
+        return 0
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
     media_items = repository.list_media_items(
@@ -3978,8 +6016,10 @@ def run_assign_places(
     from_date: str | None,
     to_date: str | None,
     all_dates: bool,
-    path: Path,
+    path: Path | None,
     dry_run: bool,
+    yes: bool,
+    as_json: bool,
 ) -> int:
     start_date, end_date = _resolve_range_selection(
         date_value=date_value,
@@ -3989,6 +6029,20 @@ def run_assign_places(
         command_name="assign-places",
         allow_all_without_dates=True,
     )
+    if path is None:
+        if not dry_run and not yes:
+            print("Refusing to write DB place assignments without --yes. Use --dry-run first.")
+            return 2
+        repository = LifelogRepository(resolve_db_path(db_path))
+        repository.initialize()
+        report = assign_db_places(
+            repository,
+            start_date=start_date,
+            end_date=end_date,
+            dry_run=dry_run,
+        )
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) if as_json else format_db_place_assignment_report(report))
+        return 0
     places = load_place_dictionary(path)
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
@@ -4032,8 +6086,9 @@ def run_db_check_cli(
     *,
     as_json: bool,
     strict: bool,
+    fail_on_missing_files: bool = False,
 ) -> int:
-    report = run_db_check(resolve_db_path(db_path))
+    report = run_db_check(resolve_db_path(db_path), fail_on_missing_files=fail_on_missing_files)
     if as_json:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
     else:
@@ -4092,13 +6147,29 @@ def run_private_eval(
 def run_make_private_eval_template(
     db_path: Path | None,
     *,
-    date_value: str,
+    date_value: str | None,
     output_path: Path,
     as_json: bool,
+    include_people: bool = False,
+    include_places: bool = False,
+    include_privacy: bool = False,
 ) -> int:
     repository = LifelogRepository(resolve_db_path(db_path))
     repository.initialize()
-    summary = write_private_eval_template_for_date(repository, date=date_value, output_path=output_path)
+    if include_people or include_places or include_privacy:
+        summary = write_private_eval_template_from_options(
+            repository,
+            date=date_value,
+            output_path=output_path,
+            include_people=include_people,
+            include_places=include_places,
+            include_privacy=include_privacy,
+        )
+    else:
+        if not date_value:
+            print("--date is required unless --include-people/--include-places/--include-privacy is used")
+            return 2
+        summary = write_private_eval_template_for_date(repository, date=date_value, output_path=output_path)
     if as_json:
         payload = dict(summary.__dict__)
         payload["path"] = str(summary.path)
@@ -4260,6 +6331,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             no_examples=args.no_examples,
             save_json=args.save_json,
         )
+    if args.command == "build-portfolio-html":
+        return run_build_portfolio_html_cli(
+            output=args.output,
+            mode=args.mode,
+            source_report=args.source_report,
+            check_privacy=args.check_privacy,
+            open_browser=args.open_browser,
+            force=args.force,
+        )
+    if args.command == "release-check":
+        return run_release_check_cli(
+            db_path,
+            version=args.version,
+            save_manifest=args.save_manifest,
+            output=args.output,
+            eval_path=args.eval_path,
+            run_pytest=args.run_pytest,
+            as_json=args.as_json,
+        )
     if args.command == "ingest-line":
         path = args.path or args.legacy_path
         if path is None:
@@ -4281,17 +6371,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             include_hidden=args.include_hidden,
             as_json=args.as_json,
+            public_mode=args.public_mode,
         )
     if args.command == "batch-qa":
         return run_batch_qa(
             db_path,
             args.query,
+            queries_file=args.queries_file,
             limit=args.limit,
             include_hidden=args.include_hidden,
             config_path=args.config,
             output_json=args.output_json,
             output_md=args.output_md,
             save_run=args.save_run,
+            continue_on_error=args.continue_on_error,
+            include_full_answer=args.include_full_answer,
+            summary_only=args.summary_only,
         )
     if args.command == "ui":
         return run_ui(db_path, args.host, args.port)
@@ -4394,6 +6489,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 rerun_model=args.rerun_model,
                 allow_fake_write=args.allow_fake_write,
+                force=args.force,
+                save_report=args.save_report,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -4543,6 +6640,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_hidden=args.include_hidden,
             as_json=args.as_json,
         )
+    if args.command == "food-search-debug":
+        return run_food_search_debug_cli(
+            db_path,
+            query=args.query,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            backend=args.backend,
+            config_path=args.config,
+            as_json=args.as_json,
+        )
     if args.command == "vlm-prompt":
         return run_vlm_prompt(template=args.template, as_json=args.as_json)
     if args.command == "vlm-safety-check":
@@ -4623,9 +6731,70 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 force=args.force,
                 skip_existing=args.skip_existing,
+                text_cues_only=args.text_cues_only,
+                vlm_text_hint_only=args.vlm_text_hint_only,
+                has_vlm_text=args.has_vlm_text,
+                ocr_priority=args.ocr_priority,
+                contains_text_hint=args.contains_text_hint,
+                caption_keywords=args.caption_keywords,
+                min_vlm_confidence=args.min_vlm_confidence,
+                only_existing_files=args.only_existing_files,
             )
         except ValueError as exc:
             parser.error(str(exc))
+    if args.command == "retry-ocr-failed":
+        try:
+            return run_retry_ocr_failed_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                limit=args.limit,
+                engine_name=args.engine,
+                config_path=args.config,
+                languages=args.languages,
+                dry_run=args.dry_run,
+                save_report=args.save_report,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "retry-embedding-failed":
+        try:
+            return run_retry_embedding_failed_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                limit=args.limit,
+                embedding_type=args.type,
+                engine_name=args.engine,
+                model_name=args.model,
+                model_path=args.model_path,
+                config_path=args.config,
+                dry_run=args.dry_run,
+                force=args.force,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "ocr-priority":
+        return run_ocr_priority_cli(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            limit=args.limit,
+            caption_keywords=args.caption_keywords,
+            min_vlm_confidence=args.min_vlm_confidence,
+            as_json=args.as_json,
+        )
+    if args.command == "missing-files":
+        return run_missing_files_cli(
+            db_path,
+            limit=args.limit,
+            export_path=args.export,
+            mark_unavailable=args.mark_unavailable,
+            yes=args.yes,
+            as_json=args.as_json,
+        )
     if args.command == "ocr-stats":
         return run_ocr_stats_cli(
             db_path,
@@ -4652,6 +6821,207 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_non_success=args.include_non_success,
             as_json=args.as_json,
         )
+    if args.command == "face-diagnostics":
+        return run_face_diagnostics_cli(
+            config_path=args.config,
+            model_path=args.model_path,
+            as_json=args.as_json,
+        )
+    if args.command == "face-detect":
+        try:
+            return run_face_detect_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                limit=args.limit,
+                engine_name=args.engine,
+                config_path=args.config,
+                model_path=args.model_path,
+                score_threshold=args.score_threshold,
+                nms_threshold=args.nms_threshold,
+                top_k=args.top_k,
+                max_input_size=args.max_input_size,
+                dry_run=args.dry_run,
+                skip_existing=args.skip_existing,
+                force=args.force,
+                min_score=args.min_score,
+                save_crops=args.save_crops,
+                only_existing_files=args.only_existing_files,
+                include_hidden=args.include_hidden,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "face-stats":
+        return run_face_stats_cli(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            as_json=args.as_json,
+        )
+    if args.command == "face-show":
+        return run_face_show_cli(
+            db_path,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            status=args.status,
+            review_status=args.review_status,
+            limit=args.limit,
+            show_errors=args.show_errors,
+            as_json=args.as_json,
+        )
+    if args.command == "face-review-queue":
+        return run_face_review_queue_cli(
+            db_path,
+            date_value=args.date,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            min_score=args.min_score,
+            has_crop=args.has_crop,
+            limit=args.limit,
+            as_json=args.as_json,
+        )
+    if args.command == "update-face-detection":
+        try:
+            return run_update_face_detection_cli(
+                db_path,
+                face_id=args.face_id,
+                review_status=args.review_status,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "face-embedding-diagnostics":
+        return run_face_embedding_diagnostics_cli(
+            config_path=args.config,
+            engine_name=args.engine,
+            as_json=args.as_json,
+        )
+    if args.command == "face-embed":
+        try:
+            return run_face_embed_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                limit=args.limit,
+                engine_name=args.engine,
+                detections_engine=args.detections_engine,
+                status=args.status,
+                config_path=args.config,
+                dry_run=args.dry_run,
+                skip_existing=args.skip_existing,
+                force=args.force,
+                replace=args.replace,
+                batch_size=args.batch_size,
+                only_with_crop=args.only_with_crop,
+                only_existing_files=args.only_existing_files,
+                save_report=args.save_report,
+                only_reviewed_detections=args.only_reviewed_detections,
+                include_unreviewed_detections=args.include_unreviewed_detections,
+                min_detection_score=args.min_detection_score,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "face-embedding-stats":
+        return run_face_embedding_stats_cli(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            as_json=args.as_json,
+        )
+    if args.command == "face-cluster":
+        try:
+            return run_face_cluster_cli(
+                db_path,
+                date_value=args.date,
+                from_date=args.from_date,
+                to_date=args.to_date,
+                method=args.method,
+                config_path=args.config,
+                distance_threshold=args.distance_threshold,
+                min_samples=args.min_samples,
+                dry_run=args.dry_run,
+                yes=args.yes,
+                replace=args.replace,
+                scope=args.scope,
+                embedding_model=args.embedding_model,
+                save_report=args.save_report,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "face-cluster-stats":
+        return run_face_cluster_stats_cli(db_path, as_json=args.as_json)
+    if args.command == "face-cluster-show":
+        return run_face_cluster_show_cli(
+            db_path,
+            cluster_id=args.cluster_id,
+            status=args.status,
+            limit=args.limit,
+            as_json=args.as_json,
+        )
+    if args.command == "update-face-cluster":
+        try:
+            return run_update_face_cluster_cli(
+                db_path,
+                cluster_id=args.cluster_id,
+                status=args.status,
+                as_json=args.as_json,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "persons":
+        try:
+            return run_persons_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "line-speakers":
+        try:
+            return run_line_speakers_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "build-media-people":
+        try:
+            return run_build_media_people_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "build-event-people":
+        try:
+            return run_build_event_people_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "people-stats":
+        return run_people_stats_cli(db_path, args)
+    if args.command == "event-people-show":
+        return run_event_people_show_cli(db_path, args)
+    if args.command == "media-people-show":
+        return run_media_people_show_cli(db_path, args)
+    if args.command == "privacy-audit":
+        return run_privacy_audit_cli(db_path, args)
+    if args.command == "person-export":
+        try:
+            return run_person_export_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "person-detach":
+        try:
+            return run_person_detach_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "person-delete":
+        try:
+            return run_person_delete_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "face-delete-data":
+        try:
+            return run_face_delete_data_cli(db_path, args)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.command == "build-events":
         try:
             return run_build_events(
@@ -4821,8 +7191,83 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return run_places_match(args.path, lat=args.lat, lon=args.lon)
             if args.places_command == "redact-preview":
                 return run_places_redact_preview(args.path)
+            if args.places_command == "list-clusters":
+                return run_places_list_clusters(
+                    db_path,
+                    limit=args.limit,
+                    status=args.status,
+                    privacy_level=args.privacy_level,
+                    category=args.category,
+                    search=args.search,
+                    from_date=args.from_date,
+                    to_date=args.to_date,
+                    min_points=args.min_points,
+                )
+            if args.places_command == "show-cluster":
+                return run_places_show_cluster(db_path, cluster_id=args.cluster_id, show_exact=args.show_exact)
+            if args.places_command == "create":
+                return run_places_create(
+                    db_path,
+                    place_id=args.place_id,
+                    name=args.name,
+                    public_name=args.public_name,
+                    category=args.category,
+                    cluster_id=args.cluster_id,
+                    aliases=args.alias,
+                    privacy_level=args.privacy_level,
+                    manual_verified=args.manual_verified,
+                    notes=args.notes,
+                )
+            if args.places_command == "link-cluster":
+                return run_places_link_cluster(
+                    db_path,
+                    place_id=args.place_id,
+                    cluster_id=args.cluster_id,
+                    yes=args.yes,
+                )
+            if args.places_command == "update":
+                return run_places_update(
+                    db_path,
+                    place_id=args.place_id,
+                    name=args.name,
+                    public_name=args.public_name,
+                    category=args.category,
+                    privacy_level=args.privacy_level,
+                    manual_verified=args.manual_verified,
+                    notes=args.notes,
+                )
+            if args.places_command == "add-alias":
+                return run_places_add_alias(db_path, place_id=args.place_id, alias=args.alias)
+            if args.places_command == "set-privacy":
+                return run_places_set_privacy(db_path, place_id=args.place_id, privacy_level=args.privacy_level)
+            if args.places_command == "hide":
+                repository = LifelogRepository(resolve_db_path(db_path))
+                repository.initialize()
+                result = hide_place(repository, place_id=args.place_id, dry_run=args.dry_run, yes=args.yes)
+                if args.as_json:
+                    print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+                else:
+                    print(format_privacy_operation(result, title="Place hide"))
+                return 0
+            if args.places_command == "reject-cluster":
+                return run_places_update_cluster_status(db_path, cluster_id=args.cluster_id, status="rejected", yes=args.yes)
+            if args.places_command == "accept-cluster":
+                return run_places_update_cluster_status(db_path, cluster_id=args.cluster_id, status="accepted", yes=args.yes)
+            if args.places_command == "unlink-cluster":
+                return run_places_unlink_cluster(db_path, cluster_id=args.cluster_id, yes=args.yes)
         except PlaceConfigError as exc:
             parser.error(str(exc))
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.command == "build-location-points":
+        return run_build_location_points(
+            db_path,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            dry_run=args.dry_run,
+            yes=args.yes,
+            as_json=args.as_json,
+        )
     if args.command == "cluster-places":
         try:
             return run_cluster_places(
@@ -4832,6 +7277,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 all_dates=args.all,
                 radius_m=args.radius_m,
                 min_points=args.min_points,
+                eps_meters=args.eps_meters,
+                min_samples=args.min_samples,
+                dry_run=args.dry_run,
+                yes=args.yes,
+                as_json=args.as_json,
                 output=args.output,
                 places_path=args.places_path,
             )
@@ -4847,6 +7297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 all_dates=args.all,
                 path=args.path,
                 dry_run=args.dry_run,
+                yes=args.yes,
+                as_json=args.as_json,
             )
         except (ValueError, PlaceConfigError) as exc:
             parser.error(str(exc))
@@ -4866,6 +7318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             db_path,
             as_json=args.as_json,
             strict=args.strict,
+            fail_on_missing_files=args.fail_on_missing_files,
         )
     if args.command in {"private-eval", "eval-private"}:
         return run_private_eval(
@@ -4885,6 +7338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             date_value=args.date,
             output_path=args.output,
             as_json=args.as_json,
+            include_people=args.include_people,
+            include_places=args.include_places,
+            include_privacy=args.include_privacy,
         )
     if args.command == "eval-compare":
         return run_eval_compare(
@@ -4936,6 +7392,12 @@ def _parse_languages(value: str | None) -> list[str]:
     if not value:
         return ["jpn", "eng"]
     return [part.strip() for part in value.replace(",", "+").split("+") if part.strip()]
+
+
+def _parse_caption_keywords(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(part.strip().lower() for part in value.split(",") if part.strip())
 
 
 def _month_range(month: str) -> tuple[str, str]:

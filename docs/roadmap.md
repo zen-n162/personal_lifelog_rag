@@ -32,6 +32,27 @@ viewing, event review, and VLM review. Next UI work:
 - keyboard-friendly review actions
 - private eval case generation from search results
 
+### Face Review Workflow
+
+Face detection now has a local review surface. Face embeddings and candidate
+clusters are available only as private diagnostics. Next steps should stay
+human-in-the-loop:
+
+- review candidate clusters before any person label is attached
+- keep person labels manual and user-entered only
+- keep LINE speaker links manual and reversible; never auto-match speakers to
+  faces or infer relationships
+- use `media_people` and `event_people` only as private, manually verified
+  context until explicit person QA/report controls are added
+- keep public reports free of face crops, embeddings, and cluster identifiers
+- add deletion/export controls for face artifacts
+- avoid automatic identity or relationship inference
+- future work: opt-in person search using only manually verified persons,
+  public/private display rules, and explicit user controls
+- PR71 implements the first conservative person/place QA layer. Remaining work
+  is richer UI filtering, private-eval coverage, and optional report sections
+  that stay disabled in public mode.
+
 ## Month-by-Month Rollout
 
 The rollout CLI supports planning and dry-run execution for each month. The
@@ -103,4 +124,3 @@ Current reports are Markdown/JSON. Future portfolio outputs:
 - long-running job dashboard
 - more robust OCR engine diagnostics
 - month-over-month evaluation dashboard
-

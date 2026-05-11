@@ -65,6 +65,9 @@ def _event_answer_sections(result: TimelineSearchResult) -> list[str]:
         detail_parts: list[str] = []
         if location:
             detail_parts.append(f"場所候補: {location}")
+        related_people = redact_text(event.get("related_persons_text"), max_chars=80)
+        if related_people:
+            detail_parts.append(f"関連人物候補: {related_people}")
         detail_parts.append(f"根拠: {evidence_count}件")
         if ocr_count or vlm_count:
             detail_parts.append(f"OCR補助: {ocr_count}件")
@@ -81,6 +84,15 @@ def _event_answer_sections(result: TimelineSearchResult) -> list[str]:
                 f"- OCR由来の補助根拠: {ocr_total}件",
                 f"- VLM由来の補助根拠: {vlm_total}件",
                 "- 画像解析による推定のため、必要に応じて写真を確認してください。",
+                "",
+            ]
+        )
+    if any(event.get("related_people") for event in events):
+        lines.extend(
+            [
+                "人物リンクによる補助情報:",
+                "- 手動確認済みperson / LINE話者 / event_people に基づく関連候補があります。",
+                "- 顔やLINEだけで同席・関係性・身元を断定しません。",
                 "",
             ]
         )

@@ -6,7 +6,7 @@ from PIL import Image
 
 from personal_lifelog_rag.db.repository import LifelogRepository
 from personal_lifelog_rag.ocr.engines import FakeOcrEngine
-from personal_lifelog_rag.ocr.ocr_service import OcrImagesOptions, ocr_stats, run_ocr_images
+from personal_lifelog_rag.ocr.ocr_service import OcrImagesOptions, ocr_priority_candidates, ocr_stats, run_ocr_images
 from personal_lifelog_rag.ocr.schemas import OcrResult
 
 
@@ -99,6 +99,88 @@ def test_no_text_detected_status_is_counted(tmp_path: Path) -> None:
 
     assert report.no_text == 1
     assert repository.get_media_ocr("media_service")["status"] == "no_text"
+
+
+def test_ocr_priority_selects_vlm_text_candidates_and_skips_missing_files(tmp_path: Path) -> None:
+    repository = _repository_with_image(tmp_path)
+    missing_path = tmp_path / "missing_text.png"
+    repository.add_media_item(
+        id="media_missing_text",
+        file_path=str(missing_path),
+        file_name=missing_path.name,
+        file_hash="hash-missing-text",
+        media_type="image",
+        captured_at="2024-12-24T10:05:00+09:00",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_service",
+        caption="A poster with visible text",
+        text_cues=["poster_text"],
+        contains_text_hint=True,
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+    repository.upsert_media_vlm(
+        media_id="media_missing_text",
+        caption="A menu with text",
+        text_cues=["menu_text"],
+        contains_text_hint=True,
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+
+    report = run_ocr_images(
+        repository,
+        OcrImagesOptions(
+            start_date="2024-12-24",
+            end_date="2024-12-24",
+            dry_run=True,
+            limit=10,
+            text_cues_only=True,
+            ocr_priority=True,
+        ),
+        engine=FakeOcrEngine(default_text="poster"),
+    )
+
+    assert report.selected_images == 1
+    assert report.rows[0]["media_id"] == "media_service"
+
+
+def test_ocr_priority_filters_by_caption_keywords_confidence_and_review_flags(tmp_path: Path) -> None:
+    repository = _repository_with_image(tmp_path)
+    repository.upsert_media_vlm(
+        media_id="media_service",
+        caption="A low confidence poster with a menu label",
+        text_cues=["menu_text"],
+        contains_text_hint=True,
+        confidence=0.8,
+        status="success",
+        vlm_engine="qwen3_vl_transformers",
+    )
+
+    rows = ocr_priority_candidates(
+        repository,
+        start_date="2024-12-24",
+        end_date="2024-12-24",
+        caption_keywords=("menu",),
+        min_vlm_confidence=0.7,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["media_id"] == "media_service"
+    assert "caption:menu" in rows[0]["priority_reason"]
+
+    repository.upsert_media_vlm_override(media_id="media_service", is_wrong=1, review_status="wrong")
+    assert (
+        ocr_priority_candidates(
+            repository,
+            start_date="2024-12-24",
+            end_date="2024-12-24",
+            caption_keywords=("menu",),
+            min_vlm_confidence=0.7,
+        )
+        == []
+    )
 
 
 def _repository_with_image(tmp_path: Path) -> LifelogRepository:

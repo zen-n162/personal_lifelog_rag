@@ -147,6 +147,42 @@ Return JSON exactly with:
   "caution": "visual-only inference"
 }}""",
     ),
+    "food_specific_tags_v1": VlmPromptTemplate(
+        name="food_specific_tags_v1",
+        purpose="Extract cautious dish-specific food cues for local image search refinement.",
+        output_schema={
+            "caption": "string",
+            "short_caption": "string",
+            "food_specific_name": "string or null",
+            "food_candidates": "array of candidate dish names",
+            "dish_confidence": "number between 0.0 and 1.0",
+            "cuisine_type": "string or null",
+            "food_cues": "array of cautious food cue strings",
+            "uncertainty_notes": "array of strings",
+            "safety_flags": "array of strings",
+        },
+        prompt=f"""{MANDATORY_SAFETY_RULES}
+
+Task:
+Identify only visible, non-sensitive food/dish cues for private local search.
+Prefer cautious candidate dish names such as ramen, soba, udon, omurice,
+curry, sushi, yakiniku, pizza, cafe_drink, or dessert when visually supported.
+If the dish is unclear, keep food_specific_name null and explain uncertainty.
+Do not claim the user definitely ate the food.
+
+Return JSON exactly with:
+{{
+  "caption": "...",
+  "short_caption": "...",
+  "food_specific_name": null,
+  "food_candidates": [],
+  "dish_confidence": 0.0,
+  "cuisine_type": null,
+  "food_cues": [],
+  "uncertainty_notes": [],
+  "safety_flags": []
+}}""",
+    ),
 }
 
 SAFE_IMAGE_ANALYSIS_PROMPT = PROMPT_TEMPLATES[SAFE_IMAGE_ANALYSIS_PROMPT_VERSION].prompt
